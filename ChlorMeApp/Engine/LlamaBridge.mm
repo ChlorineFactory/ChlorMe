@@ -226,8 +226,6 @@ static size_t incomplete_utf8_tail_length(const std::string &buf) {
 
     llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = gpuLayers;
-    mparams.use_mmap = true;
-    mparams.use_mlock = false;
 
     _model = llama_model_load_from_file(path.UTF8String, mparams);
     if (!_model) {
