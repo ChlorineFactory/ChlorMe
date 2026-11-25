@@ -194,28 +194,27 @@ public final class LocalLlamaBackend: @unchecked Sendable, LLMBackend {
                     let style = ChatTemplateFormatter.detectStyle(for: model)
                     let formattedPrompt = ChatTemplateFormatter.format(messages: messages, style: style)
 
-                    let bridgeParams = ChlorLlamaSamplingParams()
-                    bridgeParams.temperature = Float(preset.temperature)
-                    bridgeParams.minP = Float(preset.minP)
-                    bridgeParams.topP = Float(preset.topP)
-                    bridgeParams.topK = Int32(preset.topK)
-                    bridgeParams.repeatPenalty = Float(preset.repeatPenalty)
-                    bridgeParams.repeatLastN = Int32(preset.repeatLastN)
-                    bridgeParams.frequencyPenalty = Float(preset.frequencyPenalty)
-                    bridgeParams.presencePenalty = Float(preset.presencePenalty)
-                    bridgeParams.dryMultiplier = Float(preset.dryMultiplier)
-                    bridgeParams.dryBase = Float(preset.dryBase)
-                    bridgeParams.dryAllowedLength = Int32(preset.dryAllowedLength)
-                    bridgeParams.dryPenaltyLastN = Int32(preset.dryPenaltyLastN)
-                    bridgeParams.maxTokens = Int32(preset.maxTokens)
-                    bridgeParams.stopSequences = preset.stopSequences
-
                     try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
                         queue.async { [weak self] in
                             guard let self else {
                                 done.resume(throwing: LocalLlamaError.engineFailure("引擎不可用"))
                                 return
                             }
+                            let bridgeParams = ChlorLlamaSamplingParams()
+                            bridgeParams.temperature = Float(preset.temperature)
+                            bridgeParams.minP = Float(preset.minP)
+                            bridgeParams.topP = Float(preset.topP)
+                            bridgeParams.topK = Int32(preset.topK)
+                            bridgeParams.repeatPenalty = Float(preset.repeatPenalty)
+                            bridgeParams.repeatLastN = Int32(preset.repeatLastN)
+                            bridgeParams.frequencyPenalty = Float(preset.frequencyPenalty)
+                            bridgeParams.presencePenalty = Float(preset.presencePenalty)
+                            bridgeParams.dryMultiplier = Float(preset.dryMultiplier)
+                            bridgeParams.dryBase = Float(preset.dryBase)
+                            bridgeParams.dryAllowedLength = Int32(preset.dryAllowedLength)
+                            bridgeParams.dryPenaltyLastN = Int32(preset.dryPenaltyLastN)
+                            bridgeParams.maxTokens = Int32(preset.maxTokens)
+                            bridgeParams.stopSequences = preset.stopSequences
                             do {
                                 try self.engine.generate(
                                     withPrompt: formattedPrompt,

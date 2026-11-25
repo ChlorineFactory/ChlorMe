@@ -86,7 +86,7 @@ public final class ModelDownloadManager: NSObject, ObservableObject {
         return Self.makeModelConfig(fromFileName: fileName, fileSizeBytes: size)
     }
 
-    public static func makeModelConfig(fromFileName fileName: String, fileSizeBytes: Int64) -> ModelConfig {
+    nonisolated public static func makeModelConfig(fromFileName fileName: String, fileSizeBytes: Int64) -> ModelConfig {
         let baseName = fileName.replacingOccurrences(of: ".gguf", with: "", options: .caseInsensitive)
         let upper = baseName.uppercased()
         let quantCandidates = ["Q8_0", "Q6_K", "Q5_K_M", "Q5_K_S", "Q4_K_M", "Q4_K_S", "IQ4_XS", "Q3_K_L", "Q3_K_M", "Q2_K"]
@@ -442,7 +442,7 @@ public final class WiFiModelTransferServer: ObservableObject {
         return address
     }
 
-    private static let uploadPageHTML = """
+    nonisolated private static let uploadPageHTML = """
     <!DOCTYPE html>
     <html lang="zh-CN">
     <head>
