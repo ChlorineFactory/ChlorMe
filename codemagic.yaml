@@ -1,0 +1,52 @@
+workflows:
+  ios-unsigned-ipa:
+    name: ChlorMe iOS Unsigned IPA
+    max_build_duration: 30
+    instance_type: mac_mini_m2
+    environment:
+      xcode: latest
+    scripts:
+      - name: Show Xcode & Swift Versions
+        script: |
+          xcodebuild -version
+          swift --version
+      - name: Run ChlorCore Unit Tests
+        script: |
+          swift test --package-path Packages/ChlorCore
+      - name: Download Prebuilt llama.xcframework
+        script: |
+          bash scripts/fetch-llama-xcframework.sh b12398
+      - name: Generate Xcode Project with XcodeGen
+        script: |
+          which xcodegen || brew install xcodegen
+          xcodegen generate
+      - name: Build Unsigned Release iOS App
+        script: |
+          xcodebuild \
+            -project ChlorMe.xcodeproj \
+            -scheme ChlorMe \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=NO \
+            build
+      - name: Package Unsigned IPA
+        script: |
+          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/ChlorMe.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "ERROR: ChlorMe.app not found at $APP_PATH"
+            exit 1
+          fi
+          rm -rf build/Payload ChlorMe-unsigned.ipa
+          mkdir -p build/Payload
+          cp -R "$APP_PATH" build/Payload/ChlorMe.app
+          cd build
+          zip -r -y ../ChlorMe-unsigned.ipa Payload
+          cd ..
+          ls -lh ChlorMe-unsigned.ipa
+    artifacts:
+      - ChlorMe-unsigned.ipa
