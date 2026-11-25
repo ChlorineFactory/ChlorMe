@@ -1,0 +1,119 @@
+name: Build ChlorMe iOS IPA
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      llama_release_tag:
+        description: "Optional ggml-org/llama.cpp release tag (leave empty for pinned b12398 with auto-fallback)"
+        required: false
+        default: "b12398"
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Show Xcode & Swift Versions
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Run ChlorCore Unit Tests
+        run: swift test --package-path Packages/ChlorCore
+
+      - name: Download Prebuilt llama.xcframework
+        env:
+          LLAMA_TAG: ${{ github.event.inputs.llama_release_tag || 'b12398' }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p Vendor/tmp_llama
+          PINNED_URL="https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-xcframework.zip"
+          echo "Trying pinned xcframework URL: $PINNED_URL"
+          if ! curl -fL --retry 3 "$PINNED_URL" -o Vendor/llama-xcframework.zip; then
+            echo "Pinned tag not available, resolving latest xcframework from ggml-org/llama.cpp..."
+            LATEST_URL=$(curl -sS -H "Authorization: Bearer ${GH_TOKEN}" \
+              "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10" | \
+              python3 -c '
+import json, sys
+releases = json.load(sys.stdin)
+for rel in releases:
+    for asset in rel.get("assets", []):
+        name = asset.get("name", "")
+        if "xcframework.zip" in name:
+            print(asset["browser_download_url"])
+            sys.exit(0)
+sys.exit(1)
+')
+            echo "Resolved latest URL: $LATEST_URL"
+            curl -fL --retry 3 "$LATEST_URL" -o Vendor/llama-xcframework.zip
+          fi
+
+          unzip -q Vendor/llama-xcframework.zip -d Vendor/tmp_llama
+          FOUND_XC=$(find Vendor/tmp_llama -maxdepth 4 -name "llama.xcframework" -type d | head -n 1)
+          if [ -z "$FOUND_XC" ]; then
+            echo "ERROR: llama.xcframework not found in downloaded zip"
+            find Vendor/tmp_llama -maxdepth 4
+            exit 1
+          fi
+          rm -rf Vendor/llama.xcframework
+          mv "$FOUND_XC" Vendor/llama.xcframework
+          rm -rf Vendor/tmp_llama Vendor/llama-xcframework.zip
+
+          # Auto-detect whether llama.xcframework is dynamic or static and adjust XcodeGen embed flag accordingly
+          IOS_BIN=$(find Vendor/llama.xcframework -path "*ios-arm64/*" -name "llama" -type f | head -n 1)
+          echo "Detected iOS llama binary: $IOS_BIN"
+          file "$IOS_BIN" || true
+          if file "$IOS_BIN" | grep -qi "dynamically linked shared library"; then
+            echo "Dynamic framework detected -> setting embed: true"
+            sed -i '' 's/embed: false/embed: true/' project.yml
+          else
+            echo "Static framework detected -> keeping embed: false"
+          fi
+
+      - name: Install XcodeGen & Generate ChlorMe.xcodeproj
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build Unsigned Release iOS App
+        run: |
+          xcodebuild \
+            -project ChlorMe.xcodeproj \
+            -scheme ChlorMe \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package Unsigned IPA
+        run: |
+          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/ChlorMe.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "ERROR: ChlorMe.app not found at $APP_PATH"
+            exit 1
+          fi
+          rm -rf build/Payload ChlorMe-unsigned.ipa
+          mkdir -p build/Payload
+          cp -R "$APP_PATH" build/Payload/ChlorMe.app
+          cd build
+          zip -r -y ../ChlorMe-unsigned.ipa Payload
+          cd ..
+          ls -lh ChlorMe-unsigned.ipa
+
+      - name: Upload ChlorMe IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChlorMe-iOS-IPA
+          path: ChlorMe-unsigned.ipa
+          retention-days: 30

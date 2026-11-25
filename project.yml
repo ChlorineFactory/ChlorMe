@@ -1,0 +1,61 @@
+name: ChlorMe
+options:
+  bundleIdPrefix: com.chlorme
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+
+packages:
+  ChlorCore:
+    path: Packages/ChlorCore
+
+targets:
+  ChlorMe:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: ChlorMeApp
+        excludes:
+          - Info.plist
+          - ChlorMe.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.chlorme.app
+        PRODUCT_NAME: ChlorMe
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        INFOPLIST_FILE: ChlorMeApp/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ChlorMeApp/ChlorMe.entitlements
+        SWIFT_OBJC_BRIDGING_HEADER: ChlorMeApp/Engine/ChlorMe-Bridging-Header.h
+        CLANG_CXX_LANGUAGE_STANDARD: c++17
+        CLANG_CXX_LIBRARY: libc++
+        OTHER_LDFLAGS: "$(inherited) -lc++ -lsqlite3"
+        ENABLE_BITCODE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+    dependencies:
+      - package: ChlorCore
+      - framework: Vendor/llama.xcframework
+        embed: false
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
+      - sdk: Accelerate.framework
+      - sdk: NaturalLanguage.framework
+      - sdk: LocalAuthentication.framework
+      - sdk: UserNotifications.framework
+      - sdk: Network.framework
+
+schemes:
+  ChlorMe:
+    build:
+      targets:
+        ChlorMe: all
+    run:
+      config: Debug
+    archive:
+      config: Release

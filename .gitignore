@@ -1,0 +1,10 @@
+.DS_Store
+build/
+Vendor/
+ChlorMe.xcodeproj/
+.swiftpm/
+.build/
+*.ipa
+*.xcarchive
+*.xcuserstate
+xcuserdata/
