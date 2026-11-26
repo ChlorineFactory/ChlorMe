@@ -173,6 +173,17 @@ public actor ChlorDatabase {
         );
         """
         try execRaw(db: db, sql: sql)
+
+        // Safe additive migrations for existing v1.0.0 user databases (ignore errors if columns already exist)
+        let migrations = [
+            "ALTER TABLE model_configs ADD COLUMN custom_headers_json TEXT;",
+            "ALTER TABLE messages ADD COLUMN reasoning_content TEXT;",
+            "ALTER TABLE messages ADD COLUMN attachments_json TEXT;",
+            "ALTER TABLE messages ADD COLUMN web_sources_json TEXT;"
+        ]
+        for alter in migrations {
+            _ = try? execRaw(db: db, sql: alter)
+        }
     }
 
     private static func execRaw(db: OpaquePointer, sql: String) throws {
@@ -288,7 +299,7 @@ public actor ChlorDatabase {
         let sql = """
         SELECT id, name, backend_kind, local_file_name, file_size_bytes, quantization_label,
                context_length, kv_quant_type, gpu_layers, chat_template, api_base_url, api_key,
-               remote_model_name, created_at
+               remote_model_name, created_at, custom_headers_json
         FROM model_configs ORDER BY created_at DESC;
         """
         let stmt = try prepare(sql)
@@ -309,6 +320,7 @@ public actor ChlorDatabase {
                 apiBaseURL: readText(stmt, 10),
                 apiKey: readText(stmt, 11),
                 remoteModelName: readText(stmt, 12),
+                customHeadersJSON: readText(stmt, 14),
                 createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 13))
             )
             list.append(item)
@@ -321,8 +333,8 @@ public actor ChlorDatabase {
         INSERT OR REPLACE INTO model_configs (
             id, name, backend_kind, local_file_name, file_size_bytes, quantization_label,
             context_length, kv_quant_type, gpu_layers, chat_template, api_base_url, api_key,
-            remote_model_name, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            remote_model_name, created_at, custom_headers_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         let stmt = try prepare(sql)
         defer { sqlite3_finalize(stmt) }
@@ -340,6 +352,7 @@ public actor ChlorDatabase {
         bindOptionalText(stmt, 12, model.apiKey)
         bindOptionalText(stmt, 13, model.remoteModelName)
         sqlite3_bind_double(stmt, 14, model.createdAt.timeIntervalSince1970)
+        bindOptionalText(stmt, 15, model.customHeadersJSON)
         try stepDone(stmt)
     }
 
@@ -595,9 +608,9 @@ public actor ChlorDatabase {
     public func fetchMessages(conversationId: String, includeUnselectedVariants: Bool = true) throws -> [ChatMessage] {
         let sql: String
         if includeUnselectedVariants {
-            sql = "SELECT id, conversation_id, role, content, group_id, variant_index, is_selected, is_memorized, tokens_per_second, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC, variant_index ASC;"
+            sql = "SELECT id, conversation_id, role, content, group_id, variant_index, is_selected, is_memorized, tokens_per_second, created_at, reasoning_content, attachments_json, web_sources_json FROM messages WHERE conversation_id = ? ORDER BY created_at ASC, variant_index ASC;"
         } else {
-            sql = "SELECT id, conversation_id, role, content, group_id, variant_index, is_selected, is_memorized, tokens_per_second, created_at FROM messages WHERE conversation_id = ? AND is_selected = 1 ORDER BY created_at ASC;"
+            sql = "SELECT id, conversation_id, role, content, group_id, variant_index, is_selected, is_memorized, tokens_per_second, created_at, reasoning_content, attachments_json, web_sources_json FROM messages WHERE conversation_id = ? AND is_selected = 1 ORDER BY created_at ASC;"
         }
         let stmt = try prepare(sql)
         defer { sqlite3_finalize(stmt) }
@@ -605,11 +618,18 @@ public actor ChlorDatabase {
         var list: [ChatMessage] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
             let tps: Double? = sqlite3_column_type(stmt, 8) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 8)
+            let attJSON = readText(stmt, 11)
+            let attachments = attJSON.flatMap { try? jsonDecoder.decode([MessageAttachment].self, from: Data($0.utf8)) } ?? []
+            let srcJSON = readText(stmt, 12)
+            let webSources = srcJSON.flatMap { try? jsonDecoder.decode([WebSearchSource].self, from: Data($0.utf8)) } ?? []
             list.append(ChatMessage(
                 id: readText(stmt, 0) ?? UUID().uuidString,
                 conversationId: readText(stmt, 1) ?? "",
                 role: MessageRole(rawValue: readText(stmt, 2) ?? "user") ?? .user,
                 content: readText(stmt, 3) ?? "",
+                reasoningContent: readText(stmt, 10),
+                attachments: attachments,
+                webSources: webSources,
                 groupId: readText(stmt, 4) ?? UUID().uuidString,
                 variantIndex: Int(sqlite3_column_int(stmt, 5)),
                 isSelected: sqlite3_column_int(stmt, 6) != 0,
@@ -632,8 +652,8 @@ public actor ChlorDatabase {
         let sql = """
         INSERT OR REPLACE INTO messages (
             id, conversation_id, role, content, group_id, variant_index, is_selected,
-            is_memorized, tokens_per_second, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            is_memorized, tokens_per_second, created_at, reasoning_content, attachments_json, web_sources_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         let stmt = try prepare(sql)
         defer { sqlite3_finalize(stmt) }
@@ -651,6 +671,11 @@ public actor ChlorDatabase {
             sqlite3_bind_null(stmt, 9)
         }
         sqlite3_bind_double(stmt, 10, message.createdAt.timeIntervalSince1970)
+        bindOptionalText(stmt, 11, message.reasoningContent)
+        let attStr = message.attachments.isEmpty ? nil : (try? String(data: jsonEncoder.encode(message.attachments), encoding: .utf8))
+        let srcStr = message.webSources.isEmpty ? nil : (try? String(data: jsonEncoder.encode(message.webSources), encoding: .utf8))
+        bindOptionalText(stmt, 12, attStr)
+        bindOptionalText(stmt, 13, srcStr)
         try stepDone(stmt)
 
         let touchStmt = try prepare("UPDATE conversations SET last_message_at = ? WHERE id = ?;")

@@ -121,6 +121,8 @@ public enum PromptAssembler {
         settings: AppSettings,
         contextLength: Int,
         maxGenerationTokens: Int,
+        webSearchContext: String? = nil,
+        imageLoader: ((MessageAttachment) -> PromptImageData?)? = nil,
         now: Date = Date()
     ) -> AssembledPrompt {
         let matchedLorebooks = matchLorebooks(
@@ -240,6 +242,15 @@ public enum PromptAssembler {
             }
         }
 
+        if let webCtx = webSearchContext?.trimmingCharacters(in: .whitespacesAndNewlines), !webCtx.isEmpty {
+            systemParts.append(webCtx)
+            sections.append(PromptSectionSnapshot(
+                title: "实时联网搜索结果",
+                content: webCtx,
+                estimatedTokens: estimateTokens(webCtx)
+            ))
+        }
+
         let systemContent = systemParts.joined(separator: "\n\n")
         let systemTokens = estimateTokens(systemContent)
         let postTokens = postHistoryText.map(estimateTokens) ?? 0
@@ -252,11 +263,29 @@ public enum PromptAssembler {
         let candidateHistory = Array(historyMessages.suffix(settings.maxHistoryMessages))
 
         for msg in candidateHistory.reversed() {
-            let cost = estimateTokens(msg.content) + 6
+            var enrichedText = msg.content
+            var attachedImages: [PromptImageData] = []
+            for att in msg.attachments {
+                switch att.kind {
+                case .document:
+                    if let docText = att.extractedText, !docText.isEmpty {
+                        let clipped = String(docText.prefix(6000))
+                        enrichedText += "\n\n[附件文档：\(att.displayName)]\n\(clipped)"
+                    }
+                case .image:
+                    if let imgData = imageLoader?(att) {
+                        attachedImages.append(imgData)
+                    } else {
+                        enrichedText += "\n[用户发送了一张图片：\(att.displayName)]"
+                    }
+                }
+            }
+
+            let cost = estimateTokens(enrichedText) + 6 + (attachedImages.count * 256)
             if usedHistoryTokens + cost > historyBudget && !keptHistory.isEmpty {
                 break
             }
-            keptHistory.append(PromptMessage(role: msg.role, content: msg.content))
+            keptHistory.append(PromptMessage(role: msg.role, content: enrichedText, images: attachedImages))
             usedHistoryTokens += cost
         }
         keptHistory.reverse()

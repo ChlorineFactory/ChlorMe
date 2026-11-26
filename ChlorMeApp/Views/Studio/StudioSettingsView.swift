@@ -11,6 +11,10 @@ public struct StudioSettingsView: View {
     @State private var backupURL: URL?
     @State private var showRestoreImporter = false
     @State private var kvBytes: Int64 = 0
+    @State private var isWebDAVBusy = false
+    @State private var webDAVStatus: String?
+    @State private var remoteBackups: [WebDAVRemoteBackup] = []
+    @State private var showWebDAVList = false
 
     private var palette: ChlorPalette {
         ChlorPalette.palette(for: ChlorThemeMode.resolved(from: store.settings.themeMode), scheme: scheme)
@@ -205,7 +209,147 @@ public struct StudioSettingsView: View {
                     }
                     .listRowBackground(palette.surface)
 
-                    Section("隐私安全与整库备份") {
+                    Section("联网搜索增强（聊天室 🌐 开关）") {
+                        Picker("搜索引擎", selection: Binding(
+                            get: { store.settings.webSearchProvider },
+                            set: { val in
+                                var s = store.settings
+                                s.webSearchProvider = val
+                                Task { await store.saveSettings(s) }
+                            }
+                        )) {
+                            ForEach(WebSearchProviderKind.allCases, id: \.self) { provider in
+                                Text(provider.displayName).tag(provider)
+                            }
+                        }
+
+                        if store.settings.webSearchProvider.requiresAPIKey {
+                            SecureField("输入 \(store.settings.webSearchProvider.displayName) API Key", text: Binding(
+                                get: { store.settings.webSearchAPIKey },
+                                set: { val in
+                                    var s = store.settings
+                                    s.webSearchAPIKey = val
+                                    Task { await store.saveSettings(s) }
+                                }
+                            ))
+                        }
+
+                        Stepper("单次参考网页条数：\(store.settings.webSearchMaxResults)", value: Binding(
+                            get: { store.settings.webSearchMaxResults },
+                            set: { val in
+                                var s = store.settings
+                                s.webSearchMaxResults = val
+                                Task { await store.saveSettings(s) }
+                            }
+                        ), in: 1...8)
+                    }
+                    .listRowBackground(palette.surface)
+
+                    Section("WebDAV 云端备份同步（坚果云 / Nextcloud）") {
+                        TextField("服务器地址（如 https://dav.jianguoyun.com/dav/）", text: Binding(
+                            get: { store.settings.webDAV.serverURL },
+                            set: { val in
+                                var s = store.settings
+                                s.webDAV.serverURL = val
+                                Task { await store.saveSettings(s) }
+                            }
+                        ))
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                        TextField("用户名 / 邮箱", text: Binding(
+                            get: { store.settings.webDAV.username },
+                            set: { val in
+                                var s = store.settings
+                                s.webDAV.username = val
+                                Task { await store.saveSettings(s) }
+                            }
+                        ))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                        SecureField("应用密码（坚果云需生成第三方应用密码）", text: Binding(
+                            get: { store.settings.webDAV.password },
+                            set: { val in
+                                var s = store.settings
+                                s.webDAV.password = val
+                                Task { await store.saveSettings(s) }
+                            }
+                        ))
+
+                        TextField("远程子目录（默认 ChlorMe）", text: Binding(
+                            get: { store.settings.webDAV.remoteFolder },
+                            set: { val in
+                                var s = store.settings
+                                s.webDAV.remoteFolder = val
+                                Task { await store.saveSettings(s) }
+                            }
+                        ))
+                        .textInputAutocapitalization(.never)
+
+                        HStack(spacing: 12) {
+                            Button("测试连接") {
+                                isWebDAVBusy = true
+                                webDAVStatus = nil
+                                Task {
+                                    do {
+                                        try await store.testWebDAVConnection()
+                                        webDAVStatus = "✅ WebDAV 连接正常"
+                                    } catch {
+                                        webDAVStatus = "❌ \(error.localizedDescription)"
+                                    }
+                                    isWebDAVBusy = false
+                                }
+                            }
+                            .disabled(isWebDAVBusy)
+
+                            Spacer()
+
+                            Button("立即云端备份") {
+                                isWebDAVBusy = true
+                                webDAVStatus = nil
+                                Task {
+                                    do {
+                                        let name = try await store.uploadBackupToWebDAV()
+                                        webDAVStatus = "✅ 已上传：\(name)"
+                                        ChlorHaptics.success()
+                                    } catch {
+                                        webDAVStatus = "❌ \(error.localizedDescription)"
+                                    }
+                                    isWebDAVBusy = false
+                                }
+                            }
+                            .disabled(isWebDAVBusy)
+
+                            Spacer()
+
+                            Button("拉取恢复") {
+                                isWebDAVBusy = true
+                                webDAVStatus = nil
+                                Task {
+                                    do {
+                                        remoteBackups = try await store.fetchWebDAVBackups()
+                                        showWebDAVList = true
+                                    } catch {
+                                        webDAVStatus = "❌ \(error.localizedDescription)"
+                                    }
+                                    isWebDAVBusy = false
+                                }
+                            }
+                            .disabled(isWebDAVBusy)
+                        }
+                        .font(.subheadline.weight(.semibold))
+
+                        if let webDAVStatus {
+                            Text(webDAVStatus)
+                                .font(.caption)
+                                .foregroundStyle(webDAVStatus.hasPrefix("✅") ? .green : .red)
+                        }
+                    }
+                    .listRowBackground(palette.surface)
+
+                    Section("隐私安全与本地整库备份") {
                         Toggle("开启 Face ID / 密码应用锁", isOn: Binding(
                             get: { store.settings.enableFaceIDLock },
                             set: { val in
@@ -241,14 +385,47 @@ public struct StudioSettingsView: View {
                     }
                     .listRowBackground(palette.surface)
 
-                    Color.clear
-                        .frame(height: 84)
-                        .listRowBackground(Color.clear)
+                    Section("关于 ChlorMe") {
+                        LabeledContent("版本", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.1.0")
+                        LabeledContent("构建号", value: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "2")
+                    }
+                    .listRowBackground(palette.surface)
                 }
                 .scrollContentBackground(.hidden)
                 .listStyle(.insetGrouped)
             }
             .navigationTitle("自定义工坊")
+            .sheet(isPresented: $showWebDAVList) {
+                NavigationStack {
+                    List {
+                        if remoteBackups.isEmpty {
+                            ContentUnavailableView("云端暂无备份文件", systemImage: "icloud.slash", description: Text("点击「立即云端备份」上传一份后再来恢复。"))
+                        } else {
+                            ForEach(remoteBackups) { item in
+                                Button {
+                                    showWebDAVList = false
+                                    Task {
+                                        do {
+                                            try await store.restoreFromWebDAV(fileName: item.fileName)
+                                            ChlorHaptics.success()
+                                        } catch {
+                                            store.alertError = error.localizedDescription
+                                        }
+                                    }
+                                } label: {
+                                    Label(item.fileName, systemImage: "arrow.down.doc.fill")
+                                }
+                            }
+                        }
+                    }
+                    .navigationTitle("选择云端备份恢复")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) { Button("关闭") { showWebDAVList = false } }
+                    }
+                }
+                .presentationDetents([.medium])
+            }
             .sheet(isPresented: $showNewPreset) {
                 NavigationStack { SamplerPresetEditorView(preset: nil) }
             }

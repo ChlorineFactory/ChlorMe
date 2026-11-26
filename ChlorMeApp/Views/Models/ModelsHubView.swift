@@ -15,10 +15,12 @@ public struct ModelsHubView: View {
     @State private var customModelName = ""
     @State private var customURL = ""
 
+    @State private var apiProviderKind: ModelBackendKind = .openAICompatible
     @State private var apiName = ""
-    @State private var apiBaseURL = "http://192.168.1.100:11434/v1"
+    @State private var apiBaseURL = "https://api.openai.com/v1"
     @State private var apiKey = ""
-    @State private var apiRemoteModel = "qwen2.5:14b"
+    @State private var apiRemoteModel = "gpt-4o-mini"
+    @State private var apiCustomHeaders = ""
     @State private var fetchedRemoteModels: [String] = []
     @State private var isTestingAPI = false
     @State private var apiTestStatus: String?
@@ -48,7 +50,7 @@ public struct ModelsHubView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
-                    .padding(.bottom, 110)
+                    .padding(.bottom, 28)
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
@@ -118,16 +120,43 @@ public struct ModelsHubView: View {
             .sheet(isPresented: $showAddRemoteAPI) {
                 NavigationStack {
                     Form {
-                        Section("OpenAI 兼容接口（可连家中 Mac 或云端）") {
-                            TextField("节点名称（如：家里 Mac Qwen 14B）", text: $apiName)
-                            TextField("Base URL (含 /v1)", text: $apiBaseURL)
+                        Section("协议类型（原生支持三大协议）") {
+                            Picker("Provider 协议", selection: $apiProviderKind) {
+                                Text("OpenAI 兼容 (OpenAI/DeepSeek/Ollama)").tag(ModelBackendKind.openAICompatible)
+                                Text("Anthropic Claude 原生 (/v1/messages)").tag(ModelBackendKind.anthropic)
+                                Text("Google Gemini 原生 (streamGenerate)").tag(ModelBackendKind.gemini)
+                            }
+                            .onChange(of: apiProviderKind) { _, newKind in
+                                fetchedRemoteModels = []
+                                apiTestStatus = nil
+                                switch newKind {
+                                case .anthropic:
+                                    apiBaseURL = "https://api.anthropic.com"
+                                    apiRemoteModel = "claude-sonnet-4-5"
+                                case .gemini:
+                                    apiBaseURL = "https://generativelanguage.googleapis.com/v1beta"
+                                    apiRemoteModel = "gemini-2.5-flash"
+                                default:
+                                    apiBaseURL = "https://api.openai.com/v1"
+                                    apiRemoteModel = "gpt-4o-mini"
+                                }
+                            }
+                        }
+
+                        Section("连接参数") {
+                            TextField("节点显示名称", text: $apiName)
+                            TextField("Base URL", text: $apiBaseURL)
                                 .keyboardType(.URL)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
-                            TextField("Model ID（如：qwen2.5:14b / gpt-4o-mini）", text: $apiRemoteModel)
+                            TextField("Model ID", text: $apiRemoteModel)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
                             SecureField("API Key（本地 Ollama 可留空）", text: $apiKey)
+                            TextField("自定义 Headers JSON（可选，如 {\"X-Title\":\"ChlorMe\"}）", text: $apiCustomHeaders)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .font(.caption.monospaced())
                         }
 
                         Section("连通性测试 & 模型发现") {
@@ -136,7 +165,12 @@ public struct ModelsHubView: View {
                                 apiTestStatus = nil
                                 Task {
                                     do {
-                                        let list = try await store.testRemoteAPI(baseURL: apiBaseURL, apiKey: apiKey.isEmpty ? nil : apiKey)
+                                        let list = try await store.testRemoteAPI(
+                                            kind: apiProviderKind,
+                                            baseURL: apiBaseURL,
+                                            apiKey: apiKey.isEmpty ? nil : apiKey,
+                                            customHeadersJSON: apiCustomHeaders.isEmpty ? nil : apiCustomHeaders
+                                        )
                                         fetchedRemoteModels = list
                                         if let first = list.first, apiRemoteModel.isEmpty {
                                             apiRemoteModel = first
@@ -178,17 +212,18 @@ public struct ModelsHubView: View {
                             Button("保存") {
                                 let model = ModelConfig(
                                     name: apiName.isEmpty ? apiRemoteModel : apiName,
-                                    backendKind: .openAICompatible,
-                                    quantizationLabel: "API",
-                                    contextLength: 16384,
+                                    backendKind: apiProviderKind,
+                                    quantizationLabel: apiProviderKind.shortBadge,
+                                    contextLength: 32768,
                                     apiBaseURL: apiBaseURL,
                                     apiKey: apiKey.isEmpty ? nil : apiKey,
-                                    remoteModelName: apiRemoteModel
+                                    remoteModelName: apiRemoteModel,
+                                    customHeadersJSON: apiCustomHeaders.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : apiCustomHeaders
                                 )
                                 Task {
                                     await store.saveModel(model)
                                     ChlorHaptics.success()
-                                    store.showToast("已添加远程节点：\(model.name)")
+                                    store.showToast("已添加 \(apiProviderKind.shortBadge) 节点：\(model.name)")
                                     showAddRemoteAPI = false
                                 }
                             }

@@ -5,12 +5,29 @@ import Foundation
 public enum ModelBackendKind: String, Codable, CaseIterable, Sendable {
     case localGGUF = "local_gguf"
     case openAICompatible = "openai_compatible"
+    case anthropic = "anthropic"
+    case gemini = "gemini"
 
     public var displayName: String {
         switch self {
-        case .localGGUF: return "本地 GGUF"
-        case .openAICompatible: return "远程 OpenAI 兼容 API"
+        case .localGGUF: return "本地 GGUF (llama.cpp)"
+        case .openAICompatible: return "OpenAI 兼容 API"
+        case .anthropic: return "Anthropic Claude 原生"
+        case .gemini: return "Google Gemini 原生"
         }
+    }
+
+    public var shortBadge: String {
+        switch self {
+        case .localGGUF: return "GGUF"
+        case .openAICompatible: return "OpenAI"
+        case .anthropic: return "Claude"
+        case .gemini: return "Gemini"
+        }
+    }
+
+    public var isRemote: Bool {
+        self != .localGGUF
     }
 }
 
@@ -68,10 +85,12 @@ public struct ModelConfig: Identifiable, Codable, Hashable, Sendable {
     public var kvQuantType: KVCacheQuantType
     public var gpuLayers: Int
     public var chatTemplate: ChatTemplateStyle
-    /// Remote OpenAI-compatible fields
+    /// Remote OpenAI / Claude / Gemini fields
     public var apiBaseURL: String?
     public var apiKey: String?
     public var remoteModelName: String?
+    /// Optional custom HTTP headers stored as JSON object string, e.g. {"X-Title":"ChlorMe"}
+    public var customHeadersJSON: String?
     public var createdAt: Date
 
     public init(
@@ -88,6 +107,7 @@ public struct ModelConfig: Identifiable, Codable, Hashable, Sendable {
         apiBaseURL: String? = nil,
         apiKey: String? = nil,
         remoteModelName: String? = nil,
+        customHeadersJSON: String? = nil,
         createdAt: Date = Date()
     ) {
         self.id = id
@@ -103,7 +123,22 @@ public struct ModelConfig: Identifiable, Codable, Hashable, Sendable {
         self.apiBaseURL = apiBaseURL
         self.apiKey = apiKey
         self.remoteModelName = remoteModelName
+        self.customHeadersJSON = customHeadersJSON
         self.createdAt = createdAt
+    }
+
+    public func parsedCustomHeaders() -> [String: String] {
+        guard let raw = customHeadersJSON?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty,
+              let data = raw.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return [:]
+        }
+        var out: [String: String] = [:]
+        for (k, v) in dict {
+            out[k] = "\(v)"
+        }
+        return out
     }
 
     /// Rough estimated RAM usage in bytes (weights + KV cache + Metal overhead)
@@ -409,11 +444,64 @@ public struct Conversation: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+public enum AttachmentKind: String, Codable, Sendable {
+    case image
+    case document
+}
+
+public struct MessageAttachment: Identifiable, Codable, Hashable, Sendable {
+    public var id: String
+    public var kind: AttachmentKind
+    public var displayName: String
+    /// Local filename under Documents/Media for images
+    public var localFileName: String?
+    public var mimeType: String
+    /// Extracted plain text for PDF / TXT / code files
+    public var extractedText: String?
+    public var byteSize: Int64
+
+    public init(
+        id: String = UUID().uuidString,
+        kind: AttachmentKind,
+        displayName: String,
+        localFileName: String? = nil,
+        mimeType: String = "application/octet-stream",
+        extractedText: String? = nil,
+        byteSize: Int64 = 0
+    ) {
+        self.id = id
+        self.kind = kind
+        self.displayName = displayName
+        self.localFileName = localFileName
+        self.mimeType = mimeType
+        self.extractedText = extractedText
+        self.byteSize = byteSize
+    }
+}
+
+public struct WebSearchSource: Identifiable, Codable, Hashable, Sendable {
+    public var id: String
+    public var title: String
+    public var url: String
+    public var snippet: String
+
+    public init(id: String = UUID().uuidString, title: String, url: String, snippet: String) {
+        self.id = id
+        self.title = title
+        self.url = url
+        self.snippet = snippet
+    }
+}
+
 public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     public var id: String
     public var conversationId: String
     public var role: MessageRole
     public var content: String
+    /// Separated thinking/reasoning chain (<think> or reasoning_content)
+    public var reasoningContent: String?
+    public var attachments: [MessageAttachment]
+    public var webSources: [WebSearchSource]
     /// Messages sharing groupId represent Swipe variants of the same turn
     public var groupId: String
     public var variantIndex: Int
@@ -427,6 +515,9 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         conversationId: String,
         role: MessageRole,
         content: String,
+        reasoningContent: String? = nil,
+        attachments: [MessageAttachment] = [],
+        webSources: [WebSearchSource] = [],
         groupId: String = UUID().uuidString,
         variantIndex: Int = 0,
         isSelected: Bool = true,
@@ -438,6 +529,9 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         self.conversationId = conversationId
         self.role = role
         self.content = content
+        self.reasoningContent = reasoningContent
+        self.attachments = attachments
+        self.webSources = webSources
         self.groupId = groupId
         self.variantIndex = variantIndex
         self.isSelected = isSelected
@@ -589,8 +683,47 @@ public struct PromptBlock: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+public enum WebSearchProviderKind: String, Codable, CaseIterable, Sendable {
+    case duckDuckGoFree = "ddg_free"
+    case tavily = "tavily"
+    case brave = "brave"
+    case exa = "exa"
+
+    public var displayName: String {
+        switch self {
+        case .duckDuckGoFree: return "DuckDuckGo（免 Key 免费）"
+        case .tavily: return "Tavily Search（推荐 AI 搜索）"
+        case .brave: return "Brave Search API"
+        case .exa: return "Exa Neural Search"
+        }
+    }
+
+    public var requiresAPIKey: Bool {
+        self != .duckDuckGoFree
+    }
+}
+
+public struct WebDAVConfig: Codable, Equatable, Sendable {
+    public var serverURL: String
+    public var username: String
+    public var password: String
+    public var remoteFolder: String
+
+    public init(
+        serverURL: String = "https://dav.jianguoyun.com/dav/",
+        username: String = "",
+        password: String = "",
+        remoteFolder: String = "ChlorMe"
+    ) {
+        self.serverURL = serverURL
+        self.username = username
+        self.password = password
+        self.remoteFolder = remoteFolder
+    }
+}
+
 public struct AppSettings: Codable, Equatable, Sendable {
-    public var themeMode: String // "dark_glass" | "warm_journal" | "system"
+    public var themeMode: String
     public var autoReflectMessageThreshold: Int
     public var memoryRecallTopK: Int
     public var lorebookMaxEntries: Int
@@ -602,6 +735,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var greetingHour: Int
     public var greetingMinute: Int
     public var promptBlocks: [PromptBlock]
+    public var webSearchProvider: WebSearchProviderKind
+    public var webSearchAPIKey: String
+    public var webSearchMaxResults: Int
+    public var webDAV: WebDAVConfig
 
     public init(
         themeMode: String = "cosmic_liquid",
@@ -615,7 +752,11 @@ public struct AppSettings: Codable, Equatable, Sendable {
         enableDailyGreetingNotification: Bool = false,
         greetingHour: Int = 22,
         greetingMinute: Int = 30,
-        promptBlocks: [PromptBlock] = DefaultsFactory.defaultPromptBlocks()
+        promptBlocks: [PromptBlock] = DefaultsFactory.defaultPromptBlocks(),
+        webSearchProvider: WebSearchProviderKind = .duckDuckGoFree,
+        webSearchAPIKey: String = "",
+        webSearchMaxResults: Int = 4,
+        webDAV: WebDAVConfig = WebDAVConfig()
     ) {
         self.themeMode = themeMode
         self.autoReflectMessageThreshold = autoReflectMessageThreshold
@@ -629,5 +770,29 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.greetingHour = greetingHour
         self.greetingMinute = greetingMinute
         self.promptBlocks = promptBlocks
+        self.webSearchProvider = webSearchProvider
+        self.webSearchAPIKey = webSearchAPIKey
+        self.webSearchMaxResults = webSearchMaxResults
+        self.webDAV = webDAV
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        themeMode = try c.decodeIfPresent(String.self, forKey: .themeMode) ?? "cosmic_liquid"
+        autoReflectMessageThreshold = try c.decodeIfPresent(Int.self, forKey: .autoReflectMessageThreshold) ?? 10
+        memoryRecallTopK = try c.decodeIfPresent(Int.self, forKey: .memoryRecallTopK) ?? 4
+        lorebookMaxEntries = try c.decodeIfPresent(Int.self, forKey: .lorebookMaxEntries) ?? 3
+        maxHistoryMessages = try c.decodeIfPresent(Int.self, forKey: .maxHistoryMessages) ?? 24
+        backgroundUnloadSeconds = try c.decodeIfPresent(Int.self, forKey: .backgroundUnloadSeconds) ?? 120
+        enableTimeAwareness = try c.decodeIfPresent(Bool.self, forKey: .enableTimeAwareness) ?? true
+        enableFaceIDLock = try c.decodeIfPresent(Bool.self, forKey: .enableFaceIDLock) ?? false
+        enableDailyGreetingNotification = try c.decodeIfPresent(Bool.self, forKey: .enableDailyGreetingNotification) ?? false
+        greetingHour = try c.decodeIfPresent(Int.self, forKey: .greetingHour) ?? 22
+        greetingMinute = try c.decodeIfPresent(Int.self, forKey: .greetingMinute) ?? 30
+        promptBlocks = try c.decodeIfPresent([PromptBlock].self, forKey: .promptBlocks) ?? DefaultsFactory.defaultPromptBlocks()
+        webSearchProvider = try c.decodeIfPresent(WebSearchProviderKind.self, forKey: .webSearchProvider) ?? .duckDuckGoFree
+        webSearchAPIKey = try c.decodeIfPresent(String.self, forKey: .webSearchAPIKey) ?? ""
+        webSearchMaxResults = try c.decodeIfPresent(Int.self, forKey: .webSearchMaxResults) ?? 4
+        webDAV = try c.decodeIfPresent(WebDAVConfig.self, forKey: .webDAV) ?? WebDAVConfig()
     }
 }

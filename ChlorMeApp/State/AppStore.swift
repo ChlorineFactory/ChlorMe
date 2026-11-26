@@ -10,6 +10,10 @@ public final class AppStore: ObservableObject {
     public let memoryEngine: MemoryEngine
     public let localBackend = LocalLlamaBackend.shared
     public let openAIClient = OpenAICompatibleClient()
+    public let anthropicClient = AnthropicClient()
+    public let geminiClient = GeminiClient()
+    public let webSearchEngine = WebSearchEngine()
+    public let webDAVClient = WebDAVClient()
     public let downloadManager = ModelDownloadManager()
     public let wifiServer = WiFiModelTransferServer()
     public let voiceService = VoiceService()
@@ -31,7 +35,9 @@ public final class AppStore: ObservableObject {
     @Published public var loadedModelId: String?
     @Published public var isLoadingModel: Bool = false
     @Published public var isGenerating: Bool = false
+    @Published public var isSearchingWeb: Bool = false
     @Published public var streamingText: String = ""
+    @Published public var streamingReasoning: String = ""
     @Published public var streamingConversationId: String?
     @Published public var currentTokensPerSecond: Double = 0
     @Published public var availableMemoryBytes: Int64 = LocalLlamaBackend.availableMemoryBytes()
@@ -463,8 +469,45 @@ public final class AppStore: ObservableObject {
         showToast("已迎接新伴侣：\(copy.name)")
     }
 
-    public func testRemoteAPI(baseURL: String, apiKey: String?) async throws -> [String] {
-        try await openAIClient.fetchAvailableModels(baseURL: baseURL, apiKey: apiKey)
+    public func testRemoteAPI(
+        kind: ModelBackendKind,
+        baseURL: String,
+        apiKey: String?,
+        customHeadersJSON: String? = nil
+    ) async throws -> [String] {
+        let tempModel = ModelConfig(name: "test", backendKind: kind, customHeadersJSON: customHeadersJSON)
+        let headers = tempModel.parsedCustomHeaders()
+        switch kind {
+        case .anthropic:
+            return try await anthropicClient.fetchAvailableModels(baseURL: baseURL, apiKey: apiKey, customHeaders: headers)
+        case .gemini:
+            return try await geminiClient.fetchAvailableModels(baseURL: baseURL, apiKey: apiKey, customHeaders: headers)
+        default:
+            return try await openAIClient.fetchAvailableModels(baseURL: baseURL, apiKey: apiKey, customHeaders: headers)
+        }
+    }
+
+    public func testWebDAVConnection() async throws {
+        try await webDAVClient.testConnection(config: settings.webDAV)
+    }
+
+    public func uploadBackupToWebDAV() async throws -> String {
+        let localURL = try await createBackupFileURL()
+        let fileName = localURL.lastPathComponent
+        try await webDAVClient.uploadBackup(localFileURL: localURL, remoteFileName: fileName, config: settings.webDAV)
+        return fileName
+    }
+
+    public func fetchWebDAVBackups() async throws -> [WebDAVRemoteBackup] {
+        try await webDAVClient.listBackups(config: settings.webDAV)
+    }
+
+    public func restoreFromWebDAV(fileName: String) async throws {
+        let dest = FileManager.default.temporaryDirectory.appendingPathComponent("webdav-restore-\(UUID().uuidString).sqlite")
+        try await webDAVClient.downloadBackup(remoteFileName: fileName, config: settings.webDAV, to: dest)
+        try await database.restoreFromBackup(at: dest)
+        await reloadAll()
+        showToast("已从 WebDAV 恢复：\(fileName)")
     }
 
     public func createTranscriptFileURL(conversation: Conversation, character: CharacterCard) -> URL? {
@@ -547,11 +590,23 @@ public final class AppStore: ObservableObject {
         isGenerating = false
     }
 
-    public func sendUserMessage(text: String, conversation: Conversation, character: CharacterCard) async {
+    public func sendUserMessage(
+        text: String,
+        attachments: [MessageAttachment] = [],
+        webSearchEnabled: Bool = false,
+        conversation: Conversation,
+        character: CharacterCard
+    ) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isGenerating else { return }
+        guard (!trimmed.isEmpty || !attachments.isEmpty), !isGenerating else { return }
 
-        let userMsg = ChatMessage(conversationId: conversation.id, role: .user, content: trimmed)
+        let finalContent = trimmed.isEmpty ? "请查看我发送的附件。" : trimmed
+        let userMsg = ChatMessage(
+            conversationId: conversation.id,
+            role: .user,
+            content: finalContent,
+            attachments: attachments
+        )
         do {
             try await database.saveMessage(userMsg)
             messagesByConversation[conversation.id] = try await database.fetchMessages(conversationId: conversation.id)
@@ -561,21 +616,36 @@ public final class AppStore: ObservableObject {
             return
         }
 
-        await generateAssistantReply(conversation: conversation, character: character, swipeGroupId: nil)
+        await generateAssistantReply(
+            conversation: conversation,
+            character: character,
+            swipeGroupId: nil,
+            webSearchQuery: webSearchEnabled ? finalContent : nil
+        )
     }
 
     public func regenerateSwipe(for assistantMessage: ChatMessage, conversation: Conversation, character: CharacterCard) async {
         guard !isGenerating else { return }
-        await generateAssistantReply(conversation: conversation, character: character, swipeGroupId: assistantMessage.groupId)
+        await generateAssistantReply(conversation: conversation, character: character, swipeGroupId: assistantMessage.groupId, webSearchQuery: nil)
+    }
+
+    private func backend(for model: ModelConfig) -> LLMBackend {
+        switch model.backendKind {
+        case .localGGUF: return localBackend
+        case .openAICompatible: return openAIClient
+        case .anthropic: return anthropicClient
+        case .gemini: return geminiClient
+        }
     }
 
     public func generateAssistantReply(
         conversation: Conversation,
         character: CharacterCard,
-        swipeGroupId: String?
+        swipeGroupId: String?,
+        webSearchQuery: String? = nil
     ) async {
         guard let model = resolvedModel(for: conversation, character: character) else {
-            alertError = "还没有可用模型。请前往「模型」页下载/导入 GGUF，或添加一个 OpenAI 兼容远程接口。"
+            alertError = "还没有可用模型。请前往「模型」页下载/导入 GGUF，或添加一个 OpenAI / Claude / Gemini 远程接口。"
             return
         }
         let preset = resolvedPreset(for: conversation, character: character)
@@ -583,16 +653,36 @@ public final class AppStore: ObservableObject {
 
         isGenerating = true
         streamingText = ""
+        streamingReasoning = ""
         streamingConversationId = conversation.id
 
-        // Build history excluding the swipe group being regenerated
+        // Optional real-time web search before prompt assembly
+        var foundSources: [WebSearchSource] = []
+        var webSearchContext: String?
+        if let q = webSearchQuery, !q.isEmpty {
+            isSearchingWeb = true
+            do {
+                foundSources = try await webSearchEngine.search(
+                    query: q,
+                    provider: settings.webSearchProvider,
+                    apiKey: settings.webSearchAPIKey,
+                    maxResults: settings.webSearchMaxResults
+                )
+                if !foundSources.isEmpty {
+                    webSearchContext = WebSearchEngine.formatContextBlock(query: q, sources: foundSources)
+                }
+            } catch {
+                showToast("联网搜索未命中：\(error.localizedDescription)")
+            }
+            isSearchingWeb = false
+        }
+
         var activeHistory = visibleMessages(for: conversation.id)
         if let swipeGroupId {
             activeHistory.removeAll { $0.groupId == swipeGroupId }
         }
         let queryText = activeHistory.last?.content ?? ""
 
-        // Recall memories & assemble prompt
         let recalled = (try? await memoryEngine.recallMemories(
             characterId: character.id,
             query: queryText,
@@ -600,6 +690,10 @@ public final class AppStore: ObservableObject {
         )) ?? []
         let coreMems = coreMemoriesByCharacter[character.id] ?? []
         let charLore = lorebooks.filter { $0.characterId == nil || $0.characterId == character.id }
+
+        let imageLoader: ((MessageAttachment) -> PromptImageData?)? = model.backendKind.isRemote
+            ? { DocumentExtractor.loadPromptImageData(for: $0) }
+            : nil
 
         let assembled = PromptAssembler.assemble(
             character: character,
@@ -611,23 +705,32 @@ public final class AppStore: ObservableObject {
             allLorebooks: charLore,
             settings: settings,
             contextLength: model.contextLength,
-            maxGenerationTokens: preset.maxTokens
+            maxGenerationTokens: preset.maxTokens,
+            webSearchContext: webSearchContext,
+            imageLoader: imageLoader
         )
         lastAssembledPrompt = assembled
 
-        let backend: LLMBackend = (model.backendKind == .localGGUF) ? localBackend : openAIClient
+        let activeBackend = backend(for: model)
+        let savedSources = foundSources
 
         generationTask = Task {
-            var accumulated = ""
+            var rawAccumulated = ""
+            var explicitReasoning = ""
             var finalTps: Double?
             do {
-                let stream = backend.streamCompletion(messages: assembled.messages, model: model, preset: preset)
+                let stream = activeBackend.streamCompletion(messages: assembled.messages, model: model, preset: preset)
                 for try await chunk in stream {
                     if Task.isCancelled { break }
-                    if !chunk.text.isEmpty {
-                        accumulated += chunk.text
-                        streamingText = accumulated
+                    if let rDelta = chunk.reasoningDelta, !rDelta.isEmpty {
+                        explicitReasoning += rDelta
                     }
+                    if !chunk.text.isEmpty {
+                        rawAccumulated += chunk.text
+                    }
+                    let parsed = ReasoningParser.split(rawText: rawAccumulated, explicitReasoning: explicitReasoning)
+                    streamingReasoning = parsed.reasoning
+                    streamingText = parsed.answer
                     if let tps = chunk.tokensPerSecond {
                         finalTps = tps
                         currentTokensPerSecond = tps
@@ -639,19 +742,19 @@ public final class AppStore: ObservableObject {
                 }
             }
 
-            let cleaned = accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !cleaned.isEmpty {
+            let parsedFinal = ReasoningParser.split(rawText: rawAccumulated, explicitReasoning: explicitReasoning)
+            let cleanedAnswer = parsedFinal.answer
+            let cleanedReasoning = parsedFinal.reasoning.isEmpty ? nil : parsedFinal.reasoning
+
+            if !cleanedAnswer.isEmpty || cleanedReasoning != nil {
                 let groupId = swipeGroupId ?? UUID().uuidString
-                let nextVariantIndex: Int
-                if let swipeGroupId {
-                    nextVariantIndex = variants(for: swipeGroupId, in: conversation.id).count
-                } else {
-                    nextVariantIndex = 0
-                }
+                let nextVariantIndex = swipeGroupId.map { variants(for: $0, in: conversation.id).count } ?? 0
                 let assistantMsg = ChatMessage(
                     conversationId: conversation.id,
                     role: .assistant,
-                    content: cleaned,
+                    content: cleanedAnswer.isEmpty ? "（仅输出了思考过程）" : cleanedAnswer,
+                    reasoningContent: cleanedReasoning,
+                    webSources: savedSources,
                     groupId: groupId,
                     variantIndex: nextVariantIndex,
                     isSelected: true,
@@ -660,9 +763,9 @@ public final class AppStore: ObservableObject {
                 try? await database.saveMessage(assistantMsg)
                 messagesByConversation[conversation.id] = (try? await database.fetchMessages(conversationId: conversation.id)) ?? []
                 conversations = (try? await database.fetchConversations()) ?? conversations
-                if character.autoSpeakReplies {
+                if character.autoSpeakReplies && !cleanedAnswer.isEmpty {
                     voiceService.speak(
-                        text: cleaned,
+                        text: cleanedAnswer,
                         messageId: assistantMsg.id,
                         voiceIdentifier: character.voiceIdentifier,
                         rate: character.voiceRate,
@@ -672,11 +775,12 @@ public final class AppStore: ObservableObject {
             }
 
             streamingText = ""
+            streamingReasoning = ""
             streamingConversationId = nil
             isGenerating = false
+            isSearchingWeb = false
             refreshMemoryStats()
 
-            // Auto-reflect when unmemorized message count reaches threshold
             let unmemorized = visibleMessages(for: conversation.id).filter { !$0.isMemorized }
             if settings.autoReflectMessageThreshold > 0 && unmemorized.count >= settings.autoReflectMessageThreshold {
                 await reflectMemories(for: conversation, character: character, silent: true)
@@ -794,11 +898,11 @@ public final class AppStore: ObservableObject {
             dryMultiplier: 0.0,
             maxTokens: 384
         )
-        let backend: LLMBackend = (model.backendKind == .localGGUF) ? localBackend : openAIClient
+        let activeBackend = backend(for: model)
 
         var output = ""
         do {
-            for try await chunk in backend.streamCompletion(messages: reflectPrompt, model: model, preset: reflectPreset) {
+            for try await chunk in activeBackend.streamCompletion(messages: reflectPrompt, model: model, preset: reflectPreset) {
                 output += chunk.text
             }
             if let parsed = MemoryEngine.parseReflectionJSON(output) {
@@ -834,7 +938,7 @@ public final class AppStore: ObservableObject {
                     olderMessages: toSummarize
                 )
                 var summaryOut = ""
-                for try await chunk in backend.streamCompletion(messages: sumPrompt, model: model, preset: reflectPreset) {
+                for try await chunk in activeBackend.streamCompletion(messages: sumPrompt, model: model, preset: reflectPreset) {
                     summaryOut += chunk.text
                 }
                 let cleanSummary = summaryOut.trimmingCharacters(in: .whitespacesAndNewlines)

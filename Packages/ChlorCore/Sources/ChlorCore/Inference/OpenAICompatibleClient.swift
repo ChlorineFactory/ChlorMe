@@ -7,14 +7,15 @@ public enum OpenAIClientError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .invalidEndpoint:
-            return "远程 API 地址格式无效，请检查 Base URL（例如 https://api.openai.com/v1）"
+            return "远程 API 地址格式无效，请检查 Base URL"
         case .httpError(let code, let body):
-            return "远程接口返回错误 (\(code))：\(body.prefix(200))"
+            return "远程接口返回错误 (\(code))：\(body.prefix(220))"
         }
     }
 }
 
-/// Streams chat completions from any OpenAI-compatible endpoint (Ollama, llama-server, LM Studio, DeepSeek, OpenAI, etc.).
+/// Streams chat completions from OpenAI-compatible endpoints (OpenAI, DeepSeek, Ollama, LM Studio, OpenRouter, etc.)
+/// with multimodal image input, reasoning_content separation, and custom HTTP headers.
 public struct OpenAICompatibleClient: LLMBackend {
     private let session: URLSession
 
@@ -22,8 +23,7 @@ public struct OpenAICompatibleClient: LLMBackend {
         self.session = session
     }
 
-    /// Tests endpoint connectivity and fetches available model IDs via GET /models.
-    public func fetchAvailableModels(baseURL: String, apiKey: String?) async throws -> [String] {
+    public func fetchAvailableModels(baseURL: String, apiKey: String?, customHeaders: [String: String] = [:]) async throws -> [String] {
         let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw OpenAIClientError.invalidEndpoint }
         var base = trimmed.hasSuffix("/") ? String(trimmed.dropLast()) : trimmed
@@ -39,6 +39,9 @@ public struct OpenAICompatibleClient: LLMBackend {
         if let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty {
             request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         }
+        for (k, v) in customHeaders {
+            request.setValue(v, forHTTPHeaderField: k)
+        }
         let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
             let body = String(data: data, encoding: .utf8) ?? ""
@@ -51,7 +54,6 @@ public struct OpenAICompatibleClient: LLMBackend {
         return []
     }
 
-    /// Exports a conversation transcript into clean Markdown journal format.
     public static func exportMarkdownTranscript(
         character: CharacterCard,
         conversation: Conversation,
@@ -74,6 +76,9 @@ public struct OpenAICompatibleClient: LLMBackend {
         for msg in messages {
             let speaker = msg.role == .user ? "我" : character.name
             lines.append("**\(speaker)** (\(df.string(from: msg.createdAt))):")
+            if let r = msg.reasoningContent, !r.isEmpty {
+                lines.append("<details><summary>思考过程</summary>\n\n\(r)\n\n</details>")
+            }
             lines.append(msg.content)
             lines.append("")
         }
@@ -107,6 +112,24 @@ public struct OpenAICompatibleClient: LLMBackend {
                     if let key = model.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty {
                         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
                     }
+                    for (k, v) in model.parsedCustomHeaders() {
+                        request.setValue(v, forHTTPHeaderField: k)
+                    }
+
+                    let serializedMessages: [[String: Any]] = messages.map { msg in
+                        if msg.images.isEmpty {
+                            return ["role": msg.role.rawValue, "content": msg.content]
+                        } else {
+                            var parts: [[String: Any]] = [["type": "text", "text": msg.content]]
+                            for img in msg.images {
+                                parts.append([
+                                    "type": "image_url",
+                                    "image_url": ["url": "data:\(img.mimeType);base64,\(img.base64Data)"]
+                                ])
+                            }
+                            return ["role": msg.role.rawValue, "content": parts]
+                        }
+                    }
 
                     let payload: [String: Any] = [
                         "model": (model.remoteModelName?.isEmpty == false ? model.remoteModelName! : model.name),
@@ -116,7 +139,7 @@ public struct OpenAICompatibleClient: LLMBackend {
                         "max_tokens": preset.maxTokens,
                         "frequency_penalty": preset.frequencyPenalty,
                         "presence_penalty": preset.presencePenalty,
-                        "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] }
+                        "messages": serializedMessages
                     ]
                     request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
@@ -147,12 +170,19 @@ public struct OpenAICompatibleClient: LLMBackend {
                         if let data = jsonPart.data(using: .utf8),
                            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                            let choices = obj["choices"] as? [[String: Any]],
-                           let delta = choices.first?["delta"] as? [String: Any],
-                           let content = delta["content"] as? String,
-                           !content.isEmpty {
-                            chunkCount += 1
-                            let elapsed = max(0.05, Date().timeIntervalSince(startTime))
-                            continuation.yield(GenerationChunk(text: content, tokensPerSecond: Double(chunkCount) / elapsed, isDone: false))
+                           let delta = choices.first?["delta"] as? [String: Any] {
+                            let reasoning = (delta["reasoning_content"] as? String) ?? (delta["reasoning"] as? String)
+                            let content = (delta["content"] as? String) ?? ""
+                            if !content.isEmpty || (reasoning != nil && !reasoning!.isEmpty) {
+                                chunkCount += 1
+                                let elapsed = max(0.05, Date().timeIntervalSince(startTime))
+                                continuation.yield(GenerationChunk(
+                                    text: content,
+                                    reasoningDelta: reasoning,
+                                    tokensPerSecond: Double(chunkCount) / elapsed,
+                                    isDone: false
+                                ))
+                            }
                         }
                     }
 

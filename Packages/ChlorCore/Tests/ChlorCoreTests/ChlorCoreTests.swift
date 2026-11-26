@@ -182,3 +182,59 @@ private func makeTempDB() throws -> (ChlorDatabase, URL) {
     #expect(md.contains("# 与 旧角色 的私密回忆记录"))
     #expect(md.contains("今晚的星星很好看"))
 }
+
+@Test func reasoningParserWebSearchAndWebDAVParsing() async throws {
+    // 1. Streaming unclosed <think>
+    let streaming = ReasoningParser.split(rawText: "<think>先想想怎么温柔回复")
+    #expect(streaming.isStillThinking == true)
+    #expect(streaming.reasoning == "先想想怎么温柔回复")
+    #expect(streaming.answer.isEmpty)
+
+    // 2. Closed <think> + answer
+    let completed = ReasoningParser.split(rawText: "<think>用户今天很累</think>\n辛苦啦，早点休息呀！")
+    #expect(completed.isStillThinking == false)
+    #expect(completed.reasoning == "用户今天很累")
+    #expect(completed.answer == "辛苦啦，早点休息呀！")
+
+    // 3. WebDAV PROPFIND XML parsing
+    let xml = """
+    <d:multistatus xmlns:d="DAV:">
+      <d:response><d:href>/dav/ChlorMe/ChlorMe-20261126.sqlite</d:href></d:response>
+      <d:response><d:href>/dav/ChlorMe/notes.txt</d:href></d:response>
+    </d:multistatus>
+    """
+    let backups = WebDAVClient.parseSQLiteBackupsFromPropfind(xml: xml)
+    #expect(backups.count == 1)
+    #expect(backups.first?.fileName == "ChlorMe-20261126.sqlite")
+
+    // 4. SQLite persistence of reasoning, attachments, web sources, and custom headers
+    let (db, dir) = try makeTempDB()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let model = ModelConfig(
+        name: "Claude 4.5",
+        backendKind: .anthropic,
+        apiBaseURL: "https://api.anthropic.com",
+        remoteModelName: "claude-sonnet-4-5",
+        customHeadersJSON: #"{"X-Title":"ChlorMe"}"#
+    )
+    try await db.saveModel(model)
+    let fetchedModel = try await db.fetchModels().first
+    #expect(fetchedModel?.backendKind == .anthropic)
+    #expect(fetchedModel?.parsedCustomHeaders()["X-Title"] == "ChlorMe")
+
+    let conv = Conversation(characterId: "c1", title: "测试")
+    try await db.saveConversation(conv)
+    let msg = ChatMessage(
+        conversationId: conv.id,
+        role: .assistant,
+        content: "这是答案",
+        reasoningContent: "这是思考链",
+        attachments: [MessageAttachment(kind: .document, displayName: "spec.pdf", extractedText: "hello")],
+        webSources: [WebSearchSource(title: "Apple", url: "https://apple.com", snippet: "Liquid Glass")]
+    )
+    try await db.saveMessage(msg)
+    let loaded = try await db.fetchMessages(conversationId: conv.id).first
+    #expect(loaded?.reasoningContent == "这是思考链")
+    #expect(loaded?.attachments.first?.displayName == "spec.pdf")
+    #expect(loaded?.webSources.first?.title == "Apple")
+}

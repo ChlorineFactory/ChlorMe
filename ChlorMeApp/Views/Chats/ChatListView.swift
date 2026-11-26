@@ -46,7 +46,7 @@ public struct ChatListView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
-                    .padding(.bottom, 108)
+                    .padding(.bottom, 28)
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
@@ -152,8 +152,8 @@ public struct ChatListView: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(palette.primaryText)
                         .lineLimit(1)
-                } else if let remote = store.models.first(where: { $0.backendKind == .openAICompatible }) {
-                    Text("星际远程 · \(remote.name)")
+                } else if let remote = store.models.first(where: { $0.backendKind.isRemote }) {
+                    Text("远程 \(remote.backendKind.shortBadge) · \(remote.name)")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(palette.primaryText)
                         .lineLimit(1)

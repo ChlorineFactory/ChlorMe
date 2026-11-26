@@ -46,7 +46,13 @@ public struct ModelDetailSheet: View {
                         LabeledContent("预计总内存占用", value: MemoryBudgetAdvisor.formatBytes(draft.estimatedMemoryBytes))
                     }
                 } else {
-                    Section("远程 OpenAI 接口配置") {
+                    Section("远程接口配置 (\(draft.backendKind.displayName))") {
+                        Picker("协议类型", selection: $draft.backendKind) {
+                            Text("OpenAI 兼容").tag(ModelBackendKind.openAICompatible)
+                            Text("Anthropic Claude").tag(ModelBackendKind.anthropic)
+                            Text("Google Gemini").tag(ModelBackendKind.gemini)
+                        }
+
                         TextField("Base URL", text: Binding(
                             get: { draft.apiBaseURL ?? "" },
                             set: { draft.apiBaseURL = $0 }
@@ -66,10 +72,19 @@ public struct ModelDetailSheet: View {
                             set: { draft.apiKey = $0 }
                         ))
 
+                        TextField("自定义 Headers JSON（可选）", text: Binding(
+                            get: { draft.customHeadersJSON ?? "" },
+                            set: { draft.customHeadersJSON = $0.isEmpty ? nil : $0 }
+                        ))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .font(.caption.monospaced())
+
                         Picker("上下文预算", selection: $draft.contextLength) {
                             Text("8192").tag(8192)
                             Text("16384").tag(16384)
                             Text("32768").tag(32768)
+                            Text("65536").tag(65536)
                         }
                     }
                 }

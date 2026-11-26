@@ -1,22 +1,36 @@
 import Foundation
 
-public struct PromptMessage: Codable, Hashable, Sendable {
+public struct PromptImageData: Hashable, Sendable {
+    public let mimeType: String
+    public let base64Data: String
+
+    public init(mimeType: String = "image/jpeg", base64Data: String) {
+        self.mimeType = mimeType
+        self.base64Data = base64Data
+    }
+}
+
+public struct PromptMessage: Hashable, Sendable {
     public let role: MessageRole
     public let content: String
+    public let images: [PromptImageData]
 
-    public init(role: MessageRole, content: String) {
+    public init(role: MessageRole, content: String, images: [PromptImageData] = []) {
         self.role = role
         self.content = content
+        self.images = images
     }
 }
 
 public struct GenerationChunk: Sendable {
     public let text: String
+    public let reasoningDelta: String?
     public let tokensPerSecond: Double?
     public let isDone: Bool
 
-    public init(text: String, tokensPerSecond: Double? = nil, isDone: Bool = false) {
+    public init(text: String, reasoningDelta: String? = nil, tokensPerSecond: Double? = nil, isDone: Bool = false) {
         self.text = text
+        self.reasoningDelta = reasoningDelta
         self.tokensPerSecond = tokensPerSecond
         self.isDone = isDone
     }

@@ -44,7 +44,7 @@ public struct CompanionsHubView: View {
                             }
                         }
                         .padding(.horizontal, 16)
-                        .padding(.bottom, 110)
+                        .padding(.bottom, 28)
                     }
                 }
             }

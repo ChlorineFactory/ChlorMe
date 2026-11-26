@@ -19,8 +19,15 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Show Xcode & Swift Versions
+      - name: Select Latest Xcode 26+ (for Native iOS 26 Liquid Glass SDK)
         run: |
+          echo "Available Xcode installations:"
+          ls -d /Applications/Xcode*.app || true
+          XCODE_26=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1 || true)
+          if [ -n "$XCODE_26" ]; then
+            echo "Selecting Xcode 26 for native Liquid Glass SDK: $XCODE_26"
+            sudo xcode-select -s "$XCODE_26/Contents/Developer"
+          fi
           xcodebuild -version
           swift --version
 
@@ -35,11 +42,13 @@ jobs:
 
       - name: Install XcodeGen & Generate ChlorMe.xcodeproj
         run: |
-          brew install xcodegen
+          which xcodegen || brew install xcodegen
           xcodegen generate
 
-      - name: Build Unsigned Release iOS App
+      - name: Build Unsigned Release iOS App (Auto-Increment Build for LiveContainer Update)
         run: |
+          BUILD_NUM=$((10 + ${{ github.run_number }}))
+          echo "Building ChlorMe v1.1.0 (Build $BUILD_NUM)..."
           xcodebuild \
             -project ChlorMe.xcodeproj \
             -scheme ChlorMe \
@@ -47,6 +56,8 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath build/DerivedData \
+            MARKETING_VERSION="1.1.0" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUM" \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
@@ -60,17 +71,19 @@ jobs:
             echo "ERROR: ChlorMe.app not found at $APP_PATH"
             exit 1
           fi
-          rm -rf build/Payload ChlorMe-unsigned.ipa
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Info.plist"
+          rm -rf build/Payload ChlorMe-v1.1.0-unsigned.ipa
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/ChlorMe.app
           cd build
-          zip -r -y ../ChlorMe-unsigned.ipa Payload
+          zip -r -y ../ChlorMe-v1.1.0-unsigned.ipa Payload
           cd ..
-          ls -lh ChlorMe-unsigned.ipa
+          ls -lh ChlorMe-v1.1.0-unsigned.ipa
 
       - name: Upload ChlorMe IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ChlorMe-iOS-IPA
-          path: ChlorMe-unsigned.ipa
+          name: ChlorMe-v1.1.0-iOS-IPA
+          path: ChlorMe-v1.1.0-unsigned.ipa
           retention-days: 30

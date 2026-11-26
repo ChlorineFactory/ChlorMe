@@ -1,6 +1,6 @@
 workflows:
   ios-unsigned-ipa:
-    name: ChlorMe iOS Unsigned IPA
+    name: ChlorMe iOS Unsigned IPA (v1.1.0 Liquid Glass)
     max_build_duration: 30
     instance_type: mac_mini_m2
     environment:
@@ -22,6 +22,7 @@ workflows:
           xcodegen generate
       - name: Build Unsigned Release iOS App
         script: |
+          BUILD_NUM=$((10 + ${PROJECT_BUILD_NUMBER:-1}))
           xcodebuild \
             -project ChlorMe.xcodeproj \
             -scheme ChlorMe \
@@ -29,6 +30,8 @@ workflows:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath build/DerivedData \
+            MARKETING_VERSION="1.1.0" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUM" \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
@@ -41,12 +44,12 @@ workflows:
             echo "ERROR: ChlorMe.app not found at $APP_PATH"
             exit 1
           fi
-          rm -rf build/Payload ChlorMe-unsigned.ipa
+          rm -rf build/Payload ChlorMe-v1.1.0-unsigned.ipa
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/ChlorMe.app
           cd build
-          zip -r -y ../ChlorMe-unsigned.ipa Payload
+          zip -r -y ../ChlorMe-v1.1.0-unsigned.ipa Payload
           cd ..
-          ls -lh ChlorMe-unsigned.ipa
+          ls -lh ChlorMe-v1.1.0-unsigned.ipa
     artifacts:
-      - ChlorMe-unsigned.ipa
+      - ChlorMe-v1.1.0-unsigned.ipa
