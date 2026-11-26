@@ -24,8 +24,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.chlorme.app
         PRODUCT_NAME: ChlorMe
-        MARKETING_VERSION: "1.1.0"
-        CURRENT_PROJECT_VERSION: "2"
+        MARKETING_VERSION: "1.2.0"
+        CURRENT_PROJECT_VERSION: "3"
         SWIFT_VERSION: "5.0"
         INFOPLIST_FILE: ChlorMeApp/Info.plist
         CODE_SIGN_ENTITLEMENTS: ChlorMeApp/ChlorMe.entitlements

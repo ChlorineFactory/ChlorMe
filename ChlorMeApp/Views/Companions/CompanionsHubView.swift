@@ -5,6 +5,9 @@ import ChlorCore
 public struct CompanionsHubView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.dismiss) private var dismiss
+
+    public let showCloseButton: Bool
 
     @State private var section = 0
     @State private var showNewCharacter = false
@@ -22,7 +25,9 @@ public struct CompanionsHubView: View {
         ChlorPalette.palette(for: ChlorThemeMode.resolved(from: store.settings.themeMode), scheme: scheme)
     }
 
-    public init() {}
+    public init(showCloseButton: Bool = false) {
+        self.showCloseButton = showCloseButton
+    }
 
     public var body: some View {
         NavigationStack {
@@ -83,10 +88,21 @@ public struct CompanionsHubView: View {
     }
 
     private var headerBar: some View {
-        HStack {
+        HStack(spacing: 10) {
+            if showCloseButton {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(palette.primaryText)
+                        .frame(width: 40, height: 40)
+                        .liquidGlassCapsule(tint: palette.secondaryAccent, isDark: palette.isDark)
+                }
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text("伴侣工坊")
-                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
                     .foregroundStyle(palette.primaryText)
                 Text("雕琢灵魂人设、世界书与你的平行身份")
                     .font(.caption)

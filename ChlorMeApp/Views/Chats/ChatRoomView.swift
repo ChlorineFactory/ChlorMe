@@ -12,6 +12,8 @@ public struct ChatRoomView: View {
     public let conversationId: String
     public let characterId: String
     @Binding public var isInsideChatRoom: Bool
+    public let onOpenDrawer: (() -> Void)?
+    public let onOpenModels: (() -> Void)?
 
     @State private var draftText: String = ""
     @State private var pendingAttachments: [MessageAttachment] = []
@@ -41,10 +43,18 @@ public struct ChatRoomView: View {
         store.characters.first(where: { $0.id == characterId })
     }
 
-    public init(conversationId: String, characterId: String, isInsideChatRoom: Binding<Bool> = .constant(true)) {
+    public init(
+        conversationId: String,
+        characterId: String,
+        isInsideChatRoom: Binding<Bool> = .constant(true),
+        onOpenDrawer: (() -> Void)? = nil,
+        onOpenModels: (() -> Void)? = nil
+    ) {
         self.conversationId = conversationId
         self.characterId = characterId
         _isInsideChatRoom = isInsideChatRoom
+        self.onOpenDrawer = onOpenDrawer
+        self.onOpenModels = onOpenModels
     }
 
     public var body: some View {
@@ -232,59 +242,108 @@ public struct ChatRoomView: View {
             HStack(spacing: 8) {
                 Button {
                     ChlorHaptics.light()
-                    dismiss()
+                    if let onOpenDrawer {
+                        onOpenDrawer()
+                    } else {
+                        dismiss()
+                    }
                 } label: {
-                    Image(systemName: "chevron.left")
+                    Image(systemName: onOpenDrawer != nil ? "line.3.horizontal" : "chevron.left")
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(palette.primaryText)
                         .frame(width: 40, height: 40)
                         .liquidGlassCapsule(tint: accent, isDark: palette.isDark)
                 }
 
-                HStack(spacing: 10) {
-                    CompanionAvatarView(
-                        symbol: character.avatarSymbol,
-                        imageFileName: character.avatarImageFileName,
-                        accentHex: character.accentHex,
-                        size: 34
-                    )
-                    VStack(alignment: .leading, spacing: 1.5) {
-                        Text(character.name)
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(palette.primaryText)
-                        HStack(spacing: 4) {
-                            if store.isSearchingWeb {
-                                Text("正在联网检索…")
-                                    .foregroundStyle(accent)
-                            } else if store.isGenerating {
-                                Text(store.streamingReasoning.isEmpty ? "正在回复…" : "深度思考中…")
-                                    .foregroundStyle(accent)
-                            } else if store.isReflectingMemory {
-                                Text("正在珍藏回忆…")
-                                    .foregroundStyle(.orange)
-                            } else {
-                                Text(activeModel?.name ?? "未选模型")
-                                if !character.moodLabel.isEmpty {
-                                    Text("· \(character.moodLabel)")
+                // Tappable Model & Companion Quick-Switch Capsule (RikkaHub style!)
+                Menu {
+                    Section("快速切换当前会话模型") {
+                        if store.models.isEmpty {
+                            Text("暂未配置模型，请前往模型舱添加")
+                        } else {
+                            ForEach(store.models) { model in
+                                Button {
+                                    var updated = conversation
+                                    updated.modelIdOverride = model.id
+                                    Task {
+                                        await store.updateConversation(updated)
+                                        ChlorHaptics.light()
+                                        store.showToast("已切换至：\(model.name)")
+                                    }
+                                } label: {
+                                    Label(
+                                        "\(model.name) (\(model.backendKind.shortBadge))",
+                                        systemImage: activeModel?.id == model.id ? "checkmark.circle.fill" : (model.backendKind == .localGGUF ? "cpu" : "network")
+                                    )
                                 }
                             }
                         }
-                        .font(.caption2)
-                        .foregroundStyle(palette.secondaryText)
-                        .lineLimit(1)
                     }
-                    Spacer(minLength: 0)
+                    if let onOpenModels {
+                        Divider()
+                        Button {
+                            onOpenModels()
+                        } label: {
+                            Label("管理本地模型与 API 服务商…", systemImage: "slider.horizontal.below.rectangle")
+                        }
+                    }
+                    Divider()
+                    Button {
+                        Task { _ = await store.createNewConversation(for: character) }
+                    } label: {
+                        Label("为 \(character.name) 新开一条对话", systemImage: "square.and.pencil")
+                    }
+                } label: {
+                    HStack(spacing: 9) {
+                        CompanionAvatarView(
+                            symbol: character.avatarSymbol,
+                            imageFileName: character.avatarImageFileName,
+                            accentHex: character.accentHex,
+                            size: 32
+                        )
+                        VStack(alignment: .leading, spacing: 1.5) {
+                            HStack(spacing: 4) {
+                                Text(character.name)
+                                    .font(.subheadline.weight(.bold))
+                                    .foregroundStyle(palette.primaryText)
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(palette.secondaryText)
+                            }
+                            HStack(spacing: 4) {
+                                if store.isSearchingWeb {
+                                    Text("正在联网检索…")
+                                        .foregroundStyle(accent)
+                                } else if store.isGenerating {
+                                    Text(store.streamingReasoning.isEmpty ? "正在回复…" : "深度思考中…")
+                                        .foregroundStyle(accent)
+                                } else if store.isReflectingMemory {
+                                    Text("正在珍藏回忆…")
+                                        .foregroundStyle(.orange)
+                                } else {
+                                    Text(activeModel?.name ?? "点击选择模型")
+                                    if !character.moodLabel.isEmpty {
+                                        Text("· \(character.moodLabel)")
+                                    }
+                                }
+                            }
+                            .font(.caption2)
+                            .foregroundStyle(palette.secondaryText)
+                            .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .liquidGlassCapsule(tint: accent, isDark: palette.isDark, interactive: true)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .liquidGlassCapsule(tint: accent, isDark: palette.isDark, interactive: false)
 
                 Button {
                     ChlorHaptics.light()
                     showMemorySheet = true
                 } label: {
                     Image(systemName: "brain.head.profile")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(accent)
                         .frame(width: 40, height: 40)
                         .liquidGlassCapsule(tint: accent, isDark: palette.isDark)
@@ -295,7 +354,7 @@ public struct ChatRoomView: View {
                     showInspectorSheet = true
                 } label: {
                     Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(palette.primaryText)
                         .frame(width: 40, height: 40)
                         .liquidGlassCapsule(tint: palette.secondaryAccent, isDark: palette.isDark)

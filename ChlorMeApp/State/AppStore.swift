@@ -25,6 +25,7 @@ public final class AppStore: ObservableObject {
     @Published public var personas: [Persona] = []
     @Published public var lorebooks: [LorebookEntry] = []
     @Published public var conversations: [Conversation] = []
+    @Published public var activeConversationId: String?
 
     /// Active conversation cache
     @Published public var messagesByConversation: [String: [ChatMessage]] = [:]
@@ -116,6 +117,9 @@ public final class AppStore: ObservableObject {
             for char in characters {
                 coreMemoriesByCharacter[char.id] = try await database.fetchCoreMemories(characterId: char.id)
                 episodicMemoriesByCharacter[char.id] = try await database.fetchEpisodicMemories(characterId: char.id)
+            }
+            if activeConversationId == nil || !conversations.contains(where: { $0.id == activeConversationId }) {
+                activeConversationId = conversations.first?.id
             }
         } catch {
             alertError = error.localizedDescription
@@ -423,6 +427,7 @@ public final class AppStore: ObservableObject {
         } else {
             messagesByConversation[conv.id] = []
         }
+        activeConversationId = conv.id
         return conv
     }
 
@@ -431,9 +436,25 @@ public final class AppStore: ObservableObject {
             try await database.deleteConversation(id: conv.id)
             messagesByConversation.removeValue(forKey: conv.id)
             conversations = try await database.fetchConversations()
+            if activeConversationId == conv.id {
+                activeConversationId = conversations.first?.id
+            }
             showToast("已删除会话")
         } catch {
             alertError = error.localizedDescription
+        }
+    }
+
+    public func selectOrCreateDefaultConversation() async {
+        if let active = activeConversationId, conversations.contains(where: { $0.id == active }) {
+            return
+        }
+        if let first = conversations.first {
+            activeConversationId = first.id
+            return
+        }
+        if let firstChar = characters.first {
+            _ = await createNewConversation(for: firstChar)
         }
     }
 

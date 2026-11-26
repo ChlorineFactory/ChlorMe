@@ -5,6 +5,9 @@ import ChlorCore
 public struct ModelsHubView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.dismiss) private var dismiss
+
+    public let showCloseButton: Bool
 
     @State private var showFileImporter = false
     @State private var showCustomURLDownload = false
@@ -29,7 +32,9 @@ public struct ModelsHubView: View {
         ChlorPalette.palette(for: ChlorThemeMode.resolved(from: store.settings.themeMode), scheme: scheme)
     }
 
-    public init() {}
+    public init(showCloseButton: Bool = false) {
+        self.showCloseButton = showCloseButton
+    }
 
     public var body: some View {
         NavigationStack {
@@ -239,12 +244,23 @@ public struct ModelsHubView: View {
     }
 
     private var headerRow: some View {
-        HStack {
+        HStack(spacing: 10) {
+            if showCloseButton {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(palette.primaryText)
+                        .frame(width: 40, height: 40)
+                        .liquidGlassCapsule(tint: palette.secondaryAccent, isDark: palette.isDark)
+                }
+            }
             VStack(alignment: .leading, spacing: 2) {
-                Text("模型部署舱")
-                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                Text("模型与服务商")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
                     .foregroundStyle(palette.primaryText)
-                Text("本地 llama.cpp Metal 加速 · OpenAI 远程接力")
+                Text("本地 llama.cpp 离线部署 · OpenAI / Claude / Gemini")
                     .font(.caption)
                     .foregroundStyle(palette.secondaryText)
             }
