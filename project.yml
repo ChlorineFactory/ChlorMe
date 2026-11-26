@@ -49,6 +49,9 @@ targets:
       - sdk: LocalAuthentication.framework
       - sdk: UserNotifications.framework
       - sdk: Network.framework
+      - sdk: AVFoundation.framework
+      - sdk: Speech.framework
+      - sdk: PhotosUI.framework
 
 schemes:
   ChlorMe:

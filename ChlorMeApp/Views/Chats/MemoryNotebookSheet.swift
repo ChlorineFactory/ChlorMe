@@ -4,11 +4,19 @@ import ChlorCore
 public struct MemoryNotebookSheet: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var scheme
 
     public let conversation: Conversation
     public let character: CharacterCard
 
     @State private var tab = 0
+    @State private var searchQuery = ""
+    @State private var selectedCategory: MemoryCategory? = nil
+    @State private var pinnedOnly = false
+
+    @State private var moodDraft = ""
+    @State private var relationDraft = ""
+
     @State private var showAddCore = false
     @State private var coreKey = ""
     @State private var coreValue = ""
@@ -21,55 +29,74 @@ public struct MemoryNotebookSheet: View {
     @State private var epMood = "温暖"
     @State private var epPinned = false
 
+    private var palette: ChlorPalette {
+        ChlorPalette.palette(for: ChlorThemeMode.resolved(from: store.settings.themeMode), scheme: scheme)
+    }
+
     public init(conversation: Conversation, character: CharacterCard) {
         self.conversation = conversation
         self.character = character
     }
 
+    private var filteredEpisodic: [EpisodicMemory] {
+        let raw = store.episodicMemoriesByCharacter[character.id] ?? []
+        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return raw.filter { mem in
+            if pinnedOnly && !mem.isPinned { return false }
+            if let cat = selectedCategory, mem.category != cat { return false }
+            if !q.isEmpty && !mem.content.lowercased().contains(q) && !mem.mood.lowercased().contains(q) { return false }
+            return true
+        }
+    }
+
     public var body: some View {
         NavigationStack {
-            VStack(spacing: 12) {
-                Picker("记忆类型", selection: $tab) {
-                    Text("关于我（核心档案）").tag(0)
-                    Text("共同回忆录").tag(1)
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
+            ZStack {
+                CosmicNebulaBackdrop(palette: palette, accentHex: character.accentHex, animated: false)
 
-                if tab == 0 {
-                    coreMemoryList
-                } else {
-                    episodicMemoryList
-                }
-
-                // Bottom reflect trigger
-                Button {
-                    Task { await store.reflectMemories(for: conversation, character: character, silent: false) }
-                } label: {
-                    HStack {
-                        if store.isReflectingMemory {
-                            ProgressView().tint(.white)
-                            Text("正在让 \(character.name) 整理最近的回忆…")
-                        } else {
-                            Image(systemName: "sparkles")
-                            Text("立即整理刚才的对话入库")
-                        }
+                VStack(spacing: 12) {
+                    Picker("记忆类型", selection: $tab) {
+                        Text("关于我（核心档案）").tag(0)
+                        Text("共同回忆录 (\((store.episodicMemoriesByCharacter[character.id] ?? []).count))").tag(1)
                     }
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal)
+
+                    if tab == 0 {
+                        coreMemoryPanel
+                    } else {
+                        episodicMemoryPanel
+                    }
+
+                    Button {
+                        ChlorHaptics.medium()
+                        Task { await store.reflectMemories(for: conversation, character: character, silent: false) }
+                    } label: {
+                        HStack(spacing: 8) {
+                            if store.isReflectingMemory {
+                                ProgressView().tint(.white)
+                                Text("正在让 \(character.name) 珍藏最近的回忆…")
+                            } else {
+                                Image(systemName: "sparkles")
+                                Text("立即整理刚才的对话入库")
+                            }
+                        }
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 13)
+                        .background(palette.userBubble, in: Capsule())
+                        .shadow(color: palette.accent.opacity(0.35), radius: 12, y: 5)
+                    }
+                    .disabled(store.isReflectingMemory || store.isGenerating)
+                    .padding(.horizontal)
+                    .padding(.bottom, 10)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(store.isReflectingMemory || store.isGenerating)
-                .padding(.horizontal)
-                .padding(.bottom, 10)
             }
-            .navigationTitle("\(character.name) 的回忆手账")
+            .navigationTitle("\(character.name) 的星光手账")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("关闭") { dismiss() }
-                }
+                ToolbarItem(placement: .topBarLeading) { Button("关闭") { dismiss() } }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         if tab == 0 {
@@ -86,16 +113,20 @@ public struct MemoryNotebookSheet: View {
                             showAddEpisodic = true
                         }
                     } label: {
-                        Image(systemName: "plus")
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundStyle(palette.accent)
                     }
                 }
+            }
+            .onAppear {
+                moodDraft = character.moodLabel
+                relationDraft = character.relationshipLabel
             }
             .sheet(isPresented: $showAddCore) {
                 NavigationStack {
                     Form {
                         TextField("条目名（如：称呼 / 喜好 / 雷区 / 近况）", text: $coreKey)
-                        TextField("内容", text: $coreValue, axis: .vertical)
-                            .lineLimit(2...5)
+                        TextField("内容", text: $coreValue, axis: .vertical).lineLimit(2...5)
                     }
                     .navigationTitle("核心档案条目")
                     .navigationBarTitleDisplayMode(.inline)
@@ -118,8 +149,7 @@ public struct MemoryNotebookSheet: View {
                 NavigationStack {
                     Form {
                         Section("回忆内容") {
-                            TextField("写下一段值得 TA 记住的事…", text: $epContent, axis: .vertical)
-                                .lineLimit(3...6)
+                            TextField("写下一段值得 TA 记住的事…", text: $epContent, axis: .vertical).lineLimit(3...6)
                         }
                         Section("属性") {
                             Picker("分类", selection: $epCategory) {
@@ -160,113 +190,217 @@ public struct MemoryNotebookSheet: View {
         }
     }
 
-    private var coreMemoryList: some View {
+    private var coreMemoryPanel: some View {
         let items = store.coreMemoriesByCharacter[character.id] ?? []
-        return List {
-            Section {
+        return ScrollView {
+            VStack(spacing: 12) {
+                // Live mood & relationship editor card
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("此刻关系与心境")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(palette.accent)
+                    HStack(spacing: 10) {
+                        TextField("关系阶段", text: $relationDraft)
+                            .font(.subheadline)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(palette.surfaceElevated, in: RoundedRectangle(cornerRadius: 10))
+                        TextField("当前心情", text: $moodDraft)
+                            .font(.subheadline)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(palette.surfaceElevated, in: RoundedRectangle(cornerRadius: 10))
+                        Button("更新") {
+                            var updated = character
+                            updated.relationshipLabel = relationDraft
+                            updated.moodLabel = moodDraft
+                            Task {
+                                await store.saveCharacter(updated, createConversationIfMissing: false)
+                                store.showToast("已更新关系与心境")
+                            }
+                        }
+                        .font(.caption.bold())
+                        .buttonStyle(.borderedProminent)
+                        .tint(palette.accent)
+                    }
+                }
+                .padding(14)
+                .liquidGlass(cornerRadius: 20, tint: Color(hex: character.accentHex), isDark: palette.isDark)
+
                 ForEach(items) { item in
-                    Button {
-                        coreKey = item.key
-                        coreValue = item.value
-                        showAddCore = true
-                    } label: {
+                    HStack {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(item.key)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(palette.accent)
                             Text(item.value)
-                                .font(.body)
-                                .foregroundStyle(.primary)
+                                .font(.subheadline)
+                                .foregroundStyle(palette.primaryText)
                         }
-                        .padding(.vertical, 2)
-                    }
-                    .swipeActions {
+                        Spacer()
+                        Button {
+                            coreKey = item.key
+                            coreValue = item.value
+                            showAddCore = true
+                        } label: {
+                            Image(systemName: "pencil")
+                                .foregroundStyle(palette.secondaryText)
+                        }
                         Button(role: .destructive) {
                             Task { await store.deleteCoreMemory(item) }
                         } label: {
-                            Label("删除", systemImage: "trash")
+                            Image(systemName: "trash")
+                                .foregroundStyle(.red.opacity(0.8))
                         }
                     }
+                    .padding(14)
+                    .liquidGlass(cornerRadius: 18, tint: palette.secondaryAccent, isDark: palette.isDark)
                 }
-            } footer: {
-                Text("核心档案会在每次聊天时常驻发给模型，保持精简（300 字以内）效果最好。")
+
+                Text("核心档案会在每次聊天时常驻发给模型，保持精简（300 字以内）最能稳住“懂你”的体感。")
+                    .font(.caption2)
+                    .foregroundStyle(palette.secondaryText)
+                    .padding(.top, 4)
             }
+            .padding(.horizontal)
         }
-        .listStyle(.insetGrouped)
     }
 
-    private var episodicMemoryList: some View {
-        let items = store.episodicMemoriesByCharacter[character.id] ?? []
-        return List {
-            if items.isEmpty {
-                ContentUnavailableView(
-                    "还没有共同回忆",
-                    systemImage: "book.closed",
-                    description: Text("聊满几轮后会自动提炼，或者点击下方按钮立刻整理。")
-                )
-            } else {
-                ForEach(items) { mem in
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 6) {
-                            if mem.isPinned {
-                                Image(systemName: "pin.fill")
-                                    .font(.caption2)
-                                    .foregroundStyle(.orange)
-                            }
-                            Label(mem.category.displayName, systemImage: mem.category.iconName)
-                                .font(.caption2.weight(.semibold))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.accentColor.opacity(0.14), in: Capsule())
-                            Text(mem.mood)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text(String(repeating: "★", count: mem.importance))
-                                .font(.caption2)
-                                .foregroundStyle(.yellow)
-                        }
-
-                        Text(mem.content)
-                            .font(.subheadline)
-
-                        HStack {
-                            Text(mem.createdAt.formatted(date: .abbreviated, time: .shortened))
-                            Spacer()
-                            Text("已想起 \(mem.recallCount) 次")
-                        }
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 4)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        editingEpisodic = mem
-                        epContent = mem.content
-                        epCategory = mem.category
-                        epImportance = mem.importance
-                        epMood = mem.mood
-                        epPinned = mem.isPinned
-                        showAddEpisodic = true
-                    }
-                    .swipeActions(edge: .leading) {
-                        Button {
-                            Task { await store.togglePinMemory(mem) }
-                        } label: {
-                            Label(mem.isPinned ? "取消置顶" : "置顶", systemImage: mem.isPinned ? "pin.slash" : "pin")
-                        }
-                        .tint(.orange)
-                    }
-                    .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) {
-                            Task { await store.deleteEpisodicMemory(mem) }
-                        } label: {
-                            Label("删除", systemImage: "trash")
-                        }
+    private var episodicMemoryPanel: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(palette.secondaryText)
+                TextField("搜索回忆关键词或情绪…", text: $searchQuery)
+                    .font(.subheadline)
+                if !searchQuery.isEmpty {
+                    Button { searchQuery = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(palette.secondaryText)
                     }
                 }
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .liquidGlassCapsule(tint: palette.accent, isDark: palette.isDark)
+            .padding(.horizontal)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    filterChip(title: "全部", active: selectedCategory == nil && !pinnedOnly) {
+                        selectedCategory = nil
+                        pinnedOnly = false
+                    }
+                    filterChip(title: "置顶", active: pinnedOnly) {
+                        pinnedOnly.toggle()
+                    }
+                    ForEach(MemoryCategory.allCases, id: \.self) { cat in
+                        filterChip(title: cat.displayName, active: selectedCategory == cat) {
+                            selectedCategory = (selectedCategory == cat) ? nil : cat
+                        }
+                    }
+                }
+                .padding(.horizontal)
+            }
+
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    if filteredEpisodic.isEmpty {
+                        ContentUnavailableView(
+                            "暂无符合条件的回忆",
+                            systemImage: "sparkles",
+                            description: Text("聊满几轮会自动提炼，或者点击下方按钮立刻整理。")
+                        )
+                        .padding(.top, 24)
+                    } else {
+                        ForEach(filteredEpisodic) { mem in
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(spacing: 6) {
+                                    if mem.isPinned {
+                                        Image(systemName: "pin.fill")
+                                            .font(.caption2)
+                                            .foregroundStyle(.orange)
+                                    }
+                                    Label(mem.category.displayName, systemImage: mem.category.iconName)
+                                        .font(.caption2.weight(.semibold))
+                                        .padding(.horizontal, 7)
+                                        .padding(.vertical, 2)
+                                        .background(palette.accent.opacity(0.18), in: Capsule())
+                                        .foregroundStyle(palette.accent)
+                                    Text(mem.mood)
+                                        .font(.caption2)
+                                        .foregroundStyle(palette.secondaryText)
+                                    Spacer()
+                                    Text(String(repeating: "★", count: mem.importance))
+                                        .font(.caption2)
+                                        .foregroundStyle(.yellow)
+                                }
+
+                                Text(mem.content)
+                                    .font(.subheadline)
+                                    .foregroundStyle(palette.primaryText)
+
+                                HStack {
+                                    Text(mem.createdAt.formatted(date: .abbreviated, time: .shortened))
+                                    Text("· 已想起 \(mem.recallCount) 次")
+                                    Spacer()
+                                    Button {
+                                        Task { await store.togglePinMemory(mem) }
+                                    } label: {
+                                        Image(systemName: mem.isPinned ? "pin.slash" : "pin")
+                                            .foregroundStyle(.orange)
+                                    }
+                                    Button {
+                                        editingEpisodic = mem
+                                        epContent = mem.content
+                                        epCategory = mem.category
+                                        epImportance = mem.importance
+                                        epMood = mem.mood
+                                        epPinned = mem.isPinned
+                                        showAddEpisodic = true
+                                    } label: {
+                                        Image(systemName: "pencil")
+                                            .foregroundStyle(palette.secondaryText)
+                                    }
+                                    Button(role: .destructive) {
+                                        Task { await store.deleteEpisodicMemory(mem) }
+                                    } label: {
+                                        Image(systemName: "trash")
+                                            .foregroundStyle(.red.opacity(0.8))
+                                    }
+                                }
+                                .font(.caption2)
+                                .foregroundStyle(palette.secondaryText)
+                            }
+                            .padding(14)
+                            .liquidGlass(cornerRadius: 18, tint: mem.isPinned ? .orange : palette.accent, isDark: palette.isDark)
+                        }
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 12)
+            }
         }
-        .listStyle(.insetGrouped)
+    }
+
+    private func filterChip(title: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            ChlorHaptics.light()
+            action()
+        } label: {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(active ? .white : palette.secondaryText)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background {
+                    if active {
+                        Capsule().fill(palette.userBubble)
+                    } else {
+                        Capsule().fill(palette.surface)
+                            .overlay(Capsule().strokeBorder(palette.border, lineWidth: 0.8))
+                    }
+                }
+        }
+        .buttonStyle(.plain)
     }
 }

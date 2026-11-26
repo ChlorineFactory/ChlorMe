@@ -12,6 +12,7 @@ public final class AppStore: ObservableObject {
     public let openAIClient = OpenAICompatibleClient()
     public let downloadManager = ModelDownloadManager()
     public let wifiServer = WiFiModelTransferServer()
+    public let voiceService = VoiceService()
 
     @Published public var settings: AppSettings = AppSettings()
     @Published public var models: [ModelConfig] = []
@@ -63,6 +64,11 @@ public final class AppStore: ObservableObject {
             .store(in: &cancellables)
 
         wifiServer.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+
+        voiceService.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
@@ -390,18 +396,97 @@ public final class AppStore: ObservableObject {
         if let existing = conversations.first(where: { $0.characterId == character.id }) {
             return existing
         }
+        return await createNewConversation(for: character, title: character.name)
+    }
+
+    @discardableResult
+    public func createNewConversation(for character: CharacterCard, title: String? = nil) async -> Conversation {
+        let count = conversations.filter { $0.characterId == character.id }.count
+        let resolvedTitle = (title?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+            ?? (count == 0 ? character.name : "\(character.name) · 平行线 \(count + 1)")
         let conv = Conversation(
             characterId: character.id,
             personaId: character.defaultPersonaId ?? personas.first(where: \.isDefault)?.id,
-            title: character.name
+            title: resolvedTitle
         )
         await updateConversation(conv)
-        if !character.firstMessage.isEmpty {
+        if !character.firstMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let msg = ChatMessage(conversationId: conv.id, role: .assistant, content: character.firstMessage)
             try? await database.saveMessage(msg)
             messagesByConversation[conv.id] = (try? await database.fetchMessages(conversationId: conv.id)) ?? [msg]
+        } else {
+            messagesByConversation[conv.id] = []
         }
         return conv
+    }
+
+    public func deleteConversation(_ conv: Conversation) async {
+        do {
+            try await database.deleteConversation(id: conv.id)
+            messagesByConversation.removeValue(forKey: conv.id)
+            conversations = try await database.fetchConversations()
+            showToast("已删除会话")
+        } catch {
+            alertError = error.localizedDescription
+        }
+    }
+
+    public func clearMessages(in conversation: Conversation, character: CharacterCard) async {
+        let msgs = messagesByConversation[conversation.id] ?? []
+        do {
+            for m in msgs {
+                try await database.deleteMessage(id: m.id)
+            }
+            var resetConv = conversation
+            resetConv.rollingSummary = ""
+            resetConv.summarizedUntilMessageId = nil
+            try await database.saveConversation(resetConv)
+            if !character.firstMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let first = ChatMessage(conversationId: conversation.id, role: .assistant, content: character.firstMessage)
+                try await database.saveMessage(first)
+            }
+            messagesByConversation[conversation.id] = try await database.fetchMessages(conversationId: conversation.id)
+            conversations = try await database.fetchConversations()
+            showToast("已重置本段对话")
+        } catch {
+            alertError = error.localizedDescription
+        }
+    }
+
+    public func instantiateTemplate(_ template: CharacterCard) async {
+        var copy = template
+        copy.id = UUID().uuidString
+        copy.createdAt = Date()
+        copy.updatedAt = Date()
+        await saveCharacter(copy, createConversationIfMissing: true)
+        ChlorHaptics.success()
+        showToast("已迎接新伴侣：\(copy.name)")
+    }
+
+    public func testRemoteAPI(baseURL: String, apiKey: String?) async throws -> [String] {
+        try await openAIClient.fetchAvailableModels(baseURL: baseURL, apiKey: apiKey)
+    }
+
+    public func createTranscriptFileURL(conversation: Conversation, character: CharacterCard) -> URL? {
+        let msgs = visibleMessages(for: conversation.id)
+        let md = OpenAICompatibleClient.exportMarkdownTranscript(character: character, conversation: conversation, messages: msgs)
+        let df = DateFormatter()
+        df.dateFormat = "yyyyMMdd-HHmm"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("ChlorMe-\(character.name)-\(df.string(from: Date())).md")
+        do {
+            try Data(md.utf8).write(to: url)
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    public var totalMessageCount: Int {
+        messagesByConversation.values.reduce(0) { $0 + $1.filter(\.isSelected).count }
+    }
+
+    public var totalMemoryCount: Int {
+        episodicMemoriesByCharacter.values.reduce(0) { $0 + $1.count }
     }
 
     // MARK: - Messaging, Swipe, Edit & Generation
@@ -575,6 +660,15 @@ public final class AppStore: ObservableObject {
                 try? await database.saveMessage(assistantMsg)
                 messagesByConversation[conversation.id] = (try? await database.fetchMessages(conversationId: conversation.id)) ?? []
                 conversations = (try? await database.fetchConversations()) ?? conversations
+                if character.autoSpeakReplies {
+                    voiceService.speak(
+                        text: cleaned,
+                        messageId: assistantMsg.id,
+                        voiceIdentifier: character.voiceIdentifier,
+                        rate: character.voiceRate,
+                        pitch: character.voicePitch
+                    )
+                }
             }
 
             streamingText = ""

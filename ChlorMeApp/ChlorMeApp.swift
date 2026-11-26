@@ -21,6 +21,6 @@ struct ChlorMeApp: App {
     }
 
     private var themeMode: ChlorThemeMode {
-        ChlorThemeMode(rawValue: store.settings.themeMode) ?? .darkGlass
+        ChlorThemeMode.resolved(from: store.settings.themeMode)
     }
 }

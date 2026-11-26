@@ -186,6 +186,7 @@ public struct CharacterCard: Identifiable, Codable, Hashable, Sendable {
     public var id: String
     public var name: String
     public var avatarSymbol: String
+    public var avatarImageFileName: String?
     public var accentHex: String
     public var tagline: String
     public var personality: String
@@ -198,10 +199,15 @@ public struct CharacterCard: Identifiable, Codable, Hashable, Sendable {
     public var moodLabel: String
     public var relationshipLabel: String
     public var wallpaperStyle: String
+    public var wallpaperImageFileName: String?
     public var defaultModelId: String?
     public var defaultPresetId: String?
     public var defaultPersonaId: String?
     public var bubbleSplitEnabled: Bool
+    public var voiceIdentifier: String?
+    public var voiceRate: Double
+    public var voicePitch: Double
+    public var autoSpeakReplies: Bool
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -209,6 +215,7 @@ public struct CharacterCard: Identifiable, Codable, Hashable, Sendable {
         id: String = UUID().uuidString,
         name: String,
         avatarSymbol: String = "sparkles",
+        avatarImageFileName: String? = nil,
         accentHex: String = "#5BC0BE",
         tagline: String = "",
         personality: String = "",
@@ -220,17 +227,23 @@ public struct CharacterCard: Identifiable, Codable, Hashable, Sendable {
         postHistoryInstruction: String = "",
         moodLabel: String = "温和",
         relationshipLabel: String = "亲密伙伴",
-        wallpaperStyle: String = "aurora",
+        wallpaperStyle: String = "cosmic",
+        wallpaperImageFileName: String? = nil,
         defaultModelId: String? = nil,
         defaultPresetId: String? = nil,
         defaultPersonaId: String? = nil,
         bubbleSplitEnabled: Bool = true,
+        voiceIdentifier: String? = nil,
+        voiceRate: Double = 0.50,
+        voicePitch: Double = 1.05,
+        autoSpeakReplies: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
         self.id = id
         self.name = name
         self.avatarSymbol = avatarSymbol
+        self.avatarImageFileName = avatarImageFileName
         self.accentHex = accentHex
         self.tagline = tagline
         self.personality = personality
@@ -243,12 +256,48 @@ public struct CharacterCard: Identifiable, Codable, Hashable, Sendable {
         self.moodLabel = moodLabel
         self.relationshipLabel = relationshipLabel
         self.wallpaperStyle = wallpaperStyle
+        self.wallpaperImageFileName = wallpaperImageFileName
         self.defaultModelId = defaultModelId
         self.defaultPresetId = defaultPresetId
         self.defaultPersonaId = defaultPersonaId
         self.bubbleSplitEnabled = bubbleSplitEnabled
+        self.voiceIdentifier = voiceIdentifier
+        self.voiceRate = voiceRate
+        self.voicePitch = voicePitch
+        self.autoSpeakReplies = autoSpeakReplies
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? "未命名伴侣"
+        avatarSymbol = try c.decodeIfPresent(String.self, forKey: .avatarSymbol) ?? "sparkles"
+        avatarImageFileName = try c.decodeIfPresent(String.self, forKey: .avatarImageFileName)
+        accentHex = try c.decodeIfPresent(String.self, forKey: .accentHex) ?? "#5EEAD4"
+        tagline = try c.decodeIfPresent(String.self, forKey: .tagline) ?? ""
+        personality = try c.decodeIfPresent(String.self, forKey: .personality) ?? ""
+        speakingStyle = try c.decodeIfPresent(String.self, forKey: .speakingStyle) ?? ""
+        scenario = try c.decodeIfPresent(String.self, forKey: .scenario) ?? ""
+        firstMessage = try c.decodeIfPresent(String.self, forKey: .firstMessage) ?? ""
+        exampleDialogue = try c.decodeIfPresent(String.self, forKey: .exampleDialogue) ?? ""
+        systemOverride = try c.decodeIfPresent(String.self, forKey: .systemOverride) ?? ""
+        postHistoryInstruction = try c.decodeIfPresent(String.self, forKey: .postHistoryInstruction) ?? ""
+        moodLabel = try c.decodeIfPresent(String.self, forKey: .moodLabel) ?? "温和"
+        relationshipLabel = try c.decodeIfPresent(String.self, forKey: .relationshipLabel) ?? "亲密伙伴"
+        wallpaperStyle = try c.decodeIfPresent(String.self, forKey: .wallpaperStyle) ?? "cosmic"
+        wallpaperImageFileName = try c.decodeIfPresent(String.self, forKey: .wallpaperImageFileName)
+        defaultModelId = try c.decodeIfPresent(String.self, forKey: .defaultModelId)
+        defaultPresetId = try c.decodeIfPresent(String.self, forKey: .defaultPresetId)
+        defaultPersonaId = try c.decodeIfPresent(String.self, forKey: .defaultPersonaId)
+        bubbleSplitEnabled = try c.decodeIfPresent(Bool.self, forKey: .bubbleSplitEnabled) ?? true
+        voiceIdentifier = try c.decodeIfPresent(String.self, forKey: .voiceIdentifier)
+        voiceRate = try c.decodeIfPresent(Double.self, forKey: .voiceRate) ?? 0.50
+        voicePitch = try c.decodeIfPresent(Double.self, forKey: .voicePitch) ?? 1.05
+        autoSpeakReplies = try c.decodeIfPresent(Bool.self, forKey: .autoSpeakReplies) ?? false
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
     }
 }
 
@@ -555,7 +604,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var promptBlocks: [PromptBlock]
 
     public init(
-        themeMode: String = "dark_glass",
+        themeMode: String = "cosmic_liquid",
         autoReflectMessageThreshold: Int = 10,
         memoryRecallTopK: Int = 4,
         lorebookMaxEntries: Int = 3,

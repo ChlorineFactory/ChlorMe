@@ -44,6 +44,12 @@
     </array>
     <key>NSFaceIDUsageDescription</key>
     <string>用于保护您的私密 AI 伴侣对话与共同回忆</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>用于语音听写，让你直接开口与伴侣自然对话</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>用于本地语音转文字，保护隐私且便捷输入</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>用于从相册挑选伴侣专属头像与沉浸式聊天壁纸</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>用于通过局域网 Wi-Fi 从电脑传输本地 GGUF 模型，或连接家中电脑的本地大模型接口</string>
     <key>NSAppTransportSecurity</key>

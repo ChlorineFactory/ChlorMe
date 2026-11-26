@@ -11,8 +11,12 @@ public struct SessionInspectorSheet: View {
     @State private var selectedModelId: String = ""
     @State private var selectedPresetId: String = ""
     @State private var selectedPersonaId: String = ""
+    @State private var sessionTitle: String = ""
     @State private var bubbleSplit: Bool = true
+    @State private var autoSpeak: Bool = false
     @State private var showPromptDebug = false
+    @State private var showClearConfirm = false
+    @State private var transcriptURL: URL?
 
     public init(conversation: Conversation, character: CharacterCard) {
         self.conversation = conversation
@@ -22,7 +26,9 @@ public struct SessionInspectorSheet: View {
     public var body: some View {
         NavigationStack {
             Form {
-                Section("当前会话绑定") {
+                Section("会话名称与绑定") {
+                    TextField("会话标题", text: $sessionTitle)
+
                     Picker("推理模型", selection: $selectedModelId) {
                         Text("跟随默认").tag("")
                         ForEach(store.models) { model in
@@ -46,6 +52,7 @@ public struct SessionInspectorSheet: View {
                     }
 
                     Toggle("微信式多段气泡拆分", isOn: $bubbleSplit)
+                    Toggle("收到回复自动语音朗读", isOn: $autoSpeak)
                 }
 
                 if let activePreset = store.presets.first(where: { $0.id == (selectedPresetId.isEmpty ? (character.defaultPresetId ?? store.presets.first?.id) : selectedPresetId) }) {
@@ -88,6 +95,36 @@ public struct SessionInspectorSheet: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+
+                Section("会话导出与平行线") {
+                    if let url = transcriptURL {
+                        ShareLink(item: url) {
+                            Label("分享 Markdown 聊天日记", systemImage: "square.and.arrow.up")
+                        }
+                    } else {
+                        Button {
+                            transcriptURL = store.createTranscriptFileURL(conversation: conversation, character: character)
+                        } label: {
+                            Label("导出本段对话为 Markdown 日记", systemImage: "doc.text")
+                        }
+                    }
+
+                    Button {
+                        Task {
+                            _ = await store.createNewConversation(for: character)
+                            store.showToast("已为 \(character.name) 新开平行会话")
+                            dismiss()
+                        }
+                    } label: {
+                        Label("新开一条平行宇宙会话", systemImage: "plus.bubble")
+                    }
+
+                    Button(role: .destructive) {
+                        showClearConfirm = true
+                    } label: {
+                        Label("清空本段对话记录（保留共同回忆）", systemImage: "arrow.counterclockwise")
+                    }
+                }
             }
             .navigationTitle("会话调校与透视")
             .navigationBarTitleDisplayMode(.inline)
@@ -96,12 +133,14 @@ public struct SessionInspectorSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("应用") {
                         var updatedConv = conversation
+                        updatedConv.title = sessionTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? character.name : sessionTitle
                         updatedConv.modelIdOverride = selectedModelId.isEmpty ? nil : selectedModelId
                         updatedConv.presetIdOverride = selectedPresetId.isEmpty ? nil : selectedPresetId
                         updatedConv.personaId = selectedPersonaId.isEmpty ? nil : selectedPersonaId
 
                         var updatedChar = character
                         updatedChar.bubbleSplitEnabled = bubbleSplit
+                        updatedChar.autoSpeakReplies = autoSpeak
 
                         Task {
                             await store.updateConversation(updatedConv)
@@ -111,11 +150,22 @@ public struct SessionInspectorSheet: View {
                     }
                 }
             }
+            .confirmationDialog("确定清空本段对话？", isPresented: $showClearConfirm, titleVisibility: .visible) {
+                Button("清空对话（保留回忆）", role: .destructive) {
+                    Task {
+                        await store.clearMessages(in: conversation, character: character)
+                        dismiss()
+                    }
+                }
+                Button("取消", role: .cancel) {}
+            }
             .onAppear {
+                sessionTitle = conversation.title
                 selectedModelId = conversation.modelIdOverride ?? ""
                 selectedPresetId = conversation.presetIdOverride ?? ""
                 selectedPersonaId = conversation.personaId ?? ""
                 bubbleSplit = character.bubbleSplitEnabled
+                autoSpeak = character.autoSpeakReplies
             }
         }
     }

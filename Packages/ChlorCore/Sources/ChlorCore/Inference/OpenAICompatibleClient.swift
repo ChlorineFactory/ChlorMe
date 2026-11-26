@@ -22,6 +22,64 @@ public struct OpenAICompatibleClient: LLMBackend {
         self.session = session
     }
 
+    /// Tests endpoint connectivity and fetches available model IDs via GET /models.
+    public func fetchAvailableModels(baseURL: String, apiKey: String?) async throws -> [String] {
+        let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw OpenAIClientError.invalidEndpoint }
+        var base = trimmed.hasSuffix("/") ? String(trimmed.dropLast()) : trimmed
+        if base.hasSuffix("/chat/completions") {
+            base = String(base.dropLast("/chat/completions".count))
+        }
+        guard let url = URL(string: "\(base)/models") else {
+            throw OpenAIClientError.invalidEndpoint
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 12
+        if let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty {
+            request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        }
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw OpenAIClientError.httpError(http.statusCode, body)
+        }
+        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let list = obj["data"] as? [[String: Any]] {
+            return list.compactMap { $0["id"] as? String }.sorted()
+        }
+        return []
+    }
+
+    /// Exports a conversation transcript into clean Markdown journal format.
+    public static func exportMarkdownTranscript(
+        character: CharacterCard,
+        conversation: Conversation,
+        messages: [ChatMessage]
+    ) -> String {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "zh_CN")
+        df.dateFormat = "yyyy-MM-dd HH:mm"
+        var lines: [String] = [
+            "# 与 \(character.name) 的私密回忆记录",
+            "> 会话：\(conversation.title.isEmpty ? character.name : conversation.title) · 导出时间：\(df.string(from: Date()))",
+            ""
+        ]
+        if !conversation.rollingSummary.isEmpty {
+            lines.append("## 早期聊天摘要")
+            lines.append(conversation.rollingSummary)
+            lines.append("")
+        }
+        lines.append("## 对话记录")
+        for msg in messages {
+            let speaker = msg.role == .user ? "我" : character.name
+            lines.append("**\(speaker)** (\(df.string(from: msg.createdAt))):")
+            lines.append(msg.content)
+            lines.append("")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     public func streamCompletion(
         messages: [PromptMessage],
         model: ModelConfig,

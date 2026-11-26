@@ -161,3 +161,24 @@ private func makeTempDB() throws -> (ChlorDatabase, URL) {
     let bubbles = BubbleSplitter.split("今天辛苦啦。\n*递过一杯热牛奶*\n早点休息呀！", enabled: true)
     #expect(bubbles.count == 3)
 }
+
+@Test func companionTemplatesLegacyDecodeAndMarkdownExport() throws {
+    let templates = DefaultsFactory.companionTemplates()
+    #expect(templates.count == 4)
+
+    // Simulate legacy JSON missing new voice/avatar/wallpaper fields
+    let legacyJSON = #"{"id":"old-1","name":"旧角色","personality":"温柔"}"#
+    let decoded = try JSONDecoder().decode(CharacterCard.self, from: Data(legacyJSON.utf8))
+    #expect(decoded.name == "旧角色")
+    #expect(decoded.voiceRate == 0.50)
+    #expect(decoded.autoSpeakReplies == false)
+
+    let conv = Conversation(characterId: decoded.id, title: "深夜漫谈", rollingSummary: "聊了关于宇宙星云的话题")
+    let msgs = [
+        ChatMessage(conversationId: conv.id, role: .user, content: "今晚的星星很好看"),
+        ChatMessage(conversationId: conv.id, role: .assistant, content: "那我们一起再看一会儿吧")
+    ]
+    let md = OpenAICompatibleClient.exportMarkdownTranscript(character: decoded, conversation: conv, messages: msgs)
+    #expect(md.contains("# 与 旧角色 的私密回忆记录"))
+    #expect(md.contains("今晚的星星很好看"))
+}

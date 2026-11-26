@@ -1,4 +1,6 @@
 import SwiftUI
+import PhotosUI
+import AVFoundation
 import ChlorCore
 
 public struct CharacterEditorView: View {
@@ -12,8 +14,10 @@ public struct CharacterEditorView: View {
     @State private var relationshipLabel = "亲密伙伴"
     @State private var moodLabel = "温和"
     @State private var avatarSymbol = "moon.stars.fill"
-    @State private var accentHex = "#64D2FF"
-    @State private var wallpaperStyle = "aurora"
+    @State private var avatarImageFileName: String?
+    @State private var accentHex = "#5CF6E3"
+    @State private var wallpaperStyle = "cosmic"
+    @State private var wallpaperImageFileName: String?
     @State private var personality = ""
     @State private var speakingStyle = ""
     @State private var scenario = ""
@@ -25,11 +29,21 @@ public struct CharacterEditorView: View {
     @State private var defaultPresetId = ""
     @State private var defaultPersonaId = ""
     @State private var bubbleSplitEnabled = true
+
+    // Voice customization
+    @State private var voiceIdentifier = ""
+    @State private var voiceRate = 0.50
+    @State private var voicePitch = 1.05
+    @State private var autoSpeakReplies = false
+
+    // Photo pickers
+    @State private var avatarPickerItem: PhotosPickerItem?
+    @State private var wallpaperPickerItem: PhotosPickerItem?
     @State private var exportedCardURL: URL?
 
-    private let symbolOptions = ["moon.stars.fill", "sparkles", "heart.fill", "cat.fill", "leaf.fill", "flame.fill", "cloud.moon.fill", "music.note"]
-    private let colorOptions = ["#64D2FF", "#5EEAD4", "#FF7EB6", "#FFB86C", "#A78BFA", "#4ADE80"]
-    private let wallpaperOptions = [("aurora", "极光渐变"), ("sunset", "晚霞微光"), ("forest", "静谧森林"), ("plain", "纯净极简")]
+    private let symbolOptions = ["moon.stars.fill", "sparkles", "heart.fill", "cat.fill", "atom", "flame.fill", "cloud.moon.fill", "music.note"]
+    private let colorOptions = ["#5CF6E3", "#64D2FF", "#B794F6", "#FF7AC6", "#FFB86C", "#4ADE80"]
+    private let wallpaperOptions = [("cosmic", "流动宇宙星云"), ("aurora", "极光流影"), ("sunset", "晚霞微光"), ("forest", "静谧森林"), ("plain", "纯净极简")]
 
     public init(character: CharacterCard?) {
         self.character = character
@@ -37,7 +51,29 @@ public struct CharacterEditorView: View {
 
     public var body: some View {
         Form {
-            Section("基础形象") {
+            Section("专属头像与视觉形象") {
+                HStack(spacing: 16) {
+                    CompanionAvatarView(
+                        symbol: avatarSymbol,
+                        imageFileName: avatarImageFileName,
+                        accentHex: accentHex,
+                        size: 64
+                    )
+                    VStack(alignment: .leading, spacing: 8) {
+                        PhotosPicker(selection: $avatarPickerItem, matching: .images) {
+                            Label("从相册选择照片头像", systemImage: "photo.on.rectangle.angled")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        if avatarImageFileName != nil {
+                            Button("恢复为星光符号头像", role: .destructive) {
+                                avatarImageFileName = nil
+                            }
+                            .font(.caption)
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+
                 TextField("伴侣名字", text: $name)
                 TextField("一句话简介", text: $tagline)
                 TextField("关系标签（如：恋人 / 深夜挚友 / 青梅竹马）", text: $relationshipLabel)
@@ -62,7 +98,7 @@ public struct CharacterEditorView: View {
                 }
 
                 HStack(spacing: 12) {
-                    Text("主题色").font(.subheadline)
+                    Text("伴侣光晕色").font(.subheadline)
                     Spacer()
                     ForEach(colorOptions, id: \.self) { hex in
                         Circle()
@@ -73,12 +109,49 @@ public struct CharacterEditorView: View {
                     }
                 }
 
-                Picker("聊天壁纸", selection: $wallpaperStyle) {
+                Picker("内置动态壁纸", selection: $wallpaperStyle) {
                     ForEach(wallpaperOptions, id: \.0) { opt in
                         Text(opt.1).tag(opt.0)
                     }
                 }
+
+                HStack {
+                    PhotosPicker(selection: $wallpaperPickerItem, matching: .images) {
+                        Label(wallpaperImageFileName == nil ? "从相册设置专属聊天壁纸" : "更换相册聊天壁纸", systemImage: "photo.fill")
+                    }
+                    if wallpaperImageFileName != nil {
+                        Spacer()
+                        Button("清除", role: .destructive) {
+                            wallpaperImageFileName = nil
+                        }
+                        .font(.caption)
+                    }
+                }
+
                 Toggle("微信式多段气泡", isOn: $bubbleSplitEnabled)
+            }
+
+            Section("专属声音朗读 (TTS)") {
+                Picker("中文音色", selection: $voiceIdentifier) {
+                    Text("系统默认中文").tag("")
+                    ForEach(VoiceService.availableChineseVoices(), id: \.identifier) { v in
+                        Text("\(v.name) (\(v.language))").tag(v.identifier)
+                    }
+                }
+                SliderRow(title: "语速", value: $voiceRate, range: 0.35...0.62, format: "%.2f")
+                SliderRow(title: "音调", value: $voicePitch, range: 0.80...1.30, format: "%.2f")
+                Toggle("收到回复自动朗读", isOn: $autoSpeakReplies)
+                Button {
+                    store.voiceService.speak(
+                        text: firstMessage.isEmpty ? "你好呀，我是\(name.isEmpty ? "你的专属伴侣" : name)，很高兴见到你。" : firstMessage,
+                        messageId: nil,
+                        voiceIdentifier: voiceIdentifier.isEmpty ? nil : voiceIdentifier,
+                        rate: voiceRate,
+                        pitch: voicePitch
+                    )
+                } label: {
+                    Label("试听当前声线", systemImage: "speaker.wave.2.fill")
+                }
             }
 
             Section("人设与说话风格") {
@@ -154,6 +227,7 @@ public struct CharacterEditorView: View {
                         id: character?.id ?? UUID().uuidString,
                         name: name.trimmingCharacters(in: .whitespacesAndNewlines),
                         avatarSymbol: avatarSymbol,
+                        avatarImageFileName: avatarImageFileName,
                         accentHex: accentHex,
                         tagline: tagline,
                         personality: personality,
@@ -166,18 +240,42 @@ public struct CharacterEditorView: View {
                         moodLabel: moodLabel,
                         relationshipLabel: relationshipLabel,
                         wallpaperStyle: wallpaperStyle,
+                        wallpaperImageFileName: wallpaperImageFileName,
                         defaultModelId: defaultModelId.isEmpty ? nil : defaultModelId,
                         defaultPresetId: defaultPresetId.isEmpty ? nil : defaultPresetId,
                         defaultPersonaId: defaultPersonaId.isEmpty ? nil : defaultPersonaId,
                         bubbleSplitEnabled: bubbleSplitEnabled,
+                        voiceIdentifier: voiceIdentifier.isEmpty ? nil : voiceIdentifier,
+                        voiceRate: voiceRate,
+                        voicePitch: voicePitch,
+                        autoSpeakReplies: autoSpeakReplies,
                         createdAt: character?.createdAt ?? Date()
                     )
                     Task {
                         await store.saveCharacter(card, createConversationIfMissing: true)
+                        ChlorHaptics.success()
                         dismiss()
                     }
                 }
                 .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .onChange(of: avatarPickerItem) { _, newItem in
+            guard let newItem else { return }
+            Task {
+                if let data = try? await newItem.loadTransferable(type: Data.self),
+                   let saved = MediaStorage.saveImageData(data, maxDimension: 512, quality: 0.85) {
+                    avatarImageFileName = saved
+                }
+            }
+        }
+        .onChange(of: wallpaperPickerItem) { _, newItem in
+            guard let newItem else { return }
+            Task {
+                if let data = try? await newItem.loadTransferable(type: Data.self),
+                   let saved = MediaStorage.saveImageData(data, maxDimension: 1440, quality: 0.82) {
+                    wallpaperImageFileName = saved
+                }
             }
         }
         .onAppear {
@@ -187,8 +285,10 @@ public struct CharacterEditorView: View {
             relationshipLabel = c.relationshipLabel
             moodLabel = c.moodLabel
             avatarSymbol = c.avatarSymbol
+            avatarImageFileName = c.avatarImageFileName
             accentHex = c.accentHex
             wallpaperStyle = c.wallpaperStyle
+            wallpaperImageFileName = c.wallpaperImageFileName
             personality = c.personality
             speakingStyle = c.speakingStyle
             scenario = c.scenario
@@ -200,6 +300,10 @@ public struct CharacterEditorView: View {
             defaultPresetId = c.defaultPresetId ?? ""
             defaultPersonaId = c.defaultPersonaId ?? ""
             bubbleSplitEnabled = c.bubbleSplitEnabled
+            voiceIdentifier = c.voiceIdentifier ?? ""
+            voiceRate = c.voiceRate
+            voicePitch = c.voicePitch
+            autoSpeakReplies = c.autoSpeakReplies
         }
     }
 }
